@@ -1,0 +1,154 @@
+:root {
+  color: #16233a;
+  background: #f4f8fe;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.app-shell {
+  display: grid;
+  min-height: 100vh;
+  grid-template-columns: 240px 1fr;
+}
+
+.sidebar {
+  border-right: 1px solid #d9e8f7;
+  background: #fff;
+  padding: 20px 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #0a5fc7;
+  font-weight: 700;
+}
+
+.brand-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 8px;
+  background: #e9f3ff;
+  font-size: 13px;
+}
+
+.nav {
+  display: grid;
+  gap: 6px;
+  margin-top: 28px;
+}
+
+.nav-link {
+  border-radius: 8px;
+  color: #52677f;
+  padding: 10px 12px;
+  text-decoration: none;
+}
+
+.nav-link.active {
+  background: #eaf4ff;
+  color: #0969da;
+}
+
+.content {
+  min-width: 0;
+  padding: 24px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.topbar p {
+  margin: 6px 0 0;
+  color: #687b90;
+}
+
+.locale-switch,
+input {
+  min-height: 38px;
+  border: 1px solid #c8d9ec;
+  border-radius: 8px;
+  background: #fff;
+  color: #24364a;
+  padding: 0 12px;
+}
+
+.section {
+  margin-top: 24px;
+  border-top: 1px solid #dce9f7;
+  padding-top: 24px;
+}
+
+.form-panel {
+  width: min(420px, 100%);
+  border: 1px solid #d8e6f8;
+  border-radius: 8px;
+  background: #fff;
+  padding: 24px;
+}
+
+.form-panel h2 {
+  margin: 0 0 18px;
+  font-size: 18px;
+}
+
+.form-panel label {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  color: #52677f;
+}
+
+.form-panel button {
+  width: 100%;
+  min-height: 40px;
+  border: 0;
+  border-radius: 8px;
+  background: #0969da;
+  color: #fff;
+  cursor: pointer;
+}
+
+.empty {
+  color: #687b90;
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid #d9e8f7;
+  }
+
+  .nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

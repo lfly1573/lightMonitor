@@ -1,0 +1,10 @@
+/data/*
+/log/*
+/tmp/*
+/.cache/
+/lightmonitor
+/web/admin/node_modules/
+/web/dist/assets/
+*.db
+*.db-shm
+*.db-wal
