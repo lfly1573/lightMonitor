@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS monitor_groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
+    icon TEXT NOT NULL DEFAULT 'Monitor',
     description TEXT NOT NULL DEFAULT '',
     default_interval_seconds INTEGER NOT NULL DEFAULT 60
         CHECK (default_interval_seconds > 0),
@@ -455,6 +456,7 @@ VALUES
     ('data_retention_days', '30', 'integer', 'Days to keep raw monitor samples and alert logs.'),
     ('upload_token', '', 'string', 'Global token required by passive data receiver.'),
     ('default_locale', 'zh-CN', 'string', 'Default UI language.'),
+    ('app_timezone', 'Asia/Shanghai', 'string', 'Time zone used for all displayed timestamps.'),
     ('session_timeout_minutes', '120', 'integer', 'Management session timeout in minutes.');
 
 INSERT OR IGNORE INTO schema_migrations (version, name)

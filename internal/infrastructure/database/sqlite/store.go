@@ -177,10 +177,7 @@ func (s *Store) UpdateUser(ctx context.Context, id int64, input core.UserInput) 
 }
 
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE users SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, id)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
 	return err
 }
 
@@ -198,7 +195,7 @@ func (s *Store) userByID(ctx context.Context, id int64) (core.User, error) {
 
 func (s *Store) ListGroups(ctx context.Context) ([]core.Group, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, code, name, description, default_interval_seconds, missed_times_threshold,
+		SELECT id, code, name, icon, description, default_interval_seconds, missed_times_threshold,
 		       alert_enabled, enabled, created_at, updated_at
 		FROM monitor_groups
 		WHERE deleted_at IS NULL
@@ -223,9 +220,9 @@ func (s *Store) ListGroups(ctx context.Context) ([]core.Group, error) {
 func (s *Store) CreateGroup(ctx context.Context, input core.GroupInput) (core.Group, error) {
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO monitor_groups
-			(code, name, description, default_interval_seconds, missed_times_threshold, alert_enabled, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, input.Code, input.Name, input.Description, input.DefaultIntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled))
+			(code, name, icon, description, default_interval_seconds, missed_times_threshold, alert_enabled, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, input.Code, input.Name, input.Icon, input.Description, input.DefaultIntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled))
 	if err != nil {
 		return core.Group{}, err
 	}
@@ -236,10 +233,10 @@ func (s *Store) CreateGroup(ctx context.Context, input core.GroupInput) (core.Gr
 func (s *Store) UpdateGroup(ctx context.Context, id int64, input core.GroupInput) (core.Group, error) {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE monitor_groups
-		SET code = ?, name = ?, description = ?, default_interval_seconds = ?,
+		SET code = ?, name = ?, icon = ?, description = ?, default_interval_seconds = ?,
 		    missed_times_threshold = ?, alert_enabled = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND deleted_at IS NULL
-	`, input.Code, input.Name, input.Description, input.DefaultIntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled), id)
+	`, input.Code, input.Name, input.Icon, input.Description, input.DefaultIntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled), id)
 	if err != nil {
 		return core.Group{}, err
 	}
@@ -247,16 +244,13 @@ func (s *Store) UpdateGroup(ctx context.Context, id int64, input core.GroupInput
 }
 
 func (s *Store) DeleteGroup(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE monitor_groups SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, id)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM monitor_groups WHERE id = ?`, id)
 	return err
 }
 
 func (s *Store) GetGroupByCode(ctx context.Context, code string) (core.Group, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, code, name, description, default_interval_seconds, missed_times_threshold,
+		SELECT id, code, name, icon, description, default_interval_seconds, missed_times_threshold,
 		       alert_enabled, enabled, created_at, updated_at
 		FROM monitor_groups
 		WHERE code = ? AND deleted_at IS NULL AND enabled = 1
@@ -266,7 +260,7 @@ func (s *Store) GetGroupByCode(ctx context.Context, code string) (core.Group, er
 
 func (s *Store) groupByID(ctx context.Context, id int64) (core.Group, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, code, name, description, default_interval_seconds, missed_times_threshold,
+		SELECT id, code, name, icon, description, default_interval_seconds, missed_times_threshold,
 		       alert_enabled, enabled, created_at, updated_at
 		FROM monitor_groups
 		WHERE id = ? AND deleted_at IS NULL
@@ -350,10 +344,7 @@ func (s *Store) UpdateItem(ctx context.Context, id int64, input core.ItemInput) 
 }
 
 func (s *Store) DeleteItem(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE monitor_items SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, id)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM monitor_items WHERE id = ?`, id)
 	return err
 }
 
@@ -461,17 +452,11 @@ func (s *Store) UpdateActiveRequest(ctx context.Context, id int64, input core.Ac
 func (s *Store) DeleteActiveRequest(ctx context.Context, id int64) error {
 	var itemID int64
 	_ = s.db.QueryRowContext(ctx, `SELECT item_id FROM active_requests WHERE id = ?`, id).Scan(&itemID)
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE active_requests SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-	`, id)
-	if err != nil {
+	if itemID > 0 {
+		_, err := s.db.ExecContext(ctx, `DELETE FROM monitor_items WHERE id = ?`, itemID)
 		return err
 	}
-	if itemID > 0 {
-		_, err = s.db.ExecContext(ctx, `
-			UPDATE monitor_items SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-		`, itemID)
-	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM active_requests WHERE id = ?`, id)
 	return err
 }
 
@@ -523,7 +508,9 @@ func (s *Store) ListFields(ctx context.Context, groupID, itemID int64) ([]core.F
 func (s *Store) UpsertField(ctx context.Context, input core.FieldInput) (core.FieldDefinition, error) {
 	var id int64
 	var err error
-	if input.ScopeType == "item" && input.ItemID != nil {
+	if input.ID > 0 {
+		id = input.ID
+	} else if input.ScopeType == "item" && input.ItemID != nil {
 		err = s.db.QueryRowContext(ctx, `
 			SELECT id FROM monitor_field_definitions
 			WHERE scope_type = 'item' AND item_id = ? AND field_path = ? AND deleted_at IS NULL
@@ -534,7 +521,18 @@ func (s *Store) UpsertField(ctx context.Context, input core.FieldInput) (core.Fi
 			WHERE scope_type = 'group' AND group_id = ? AND field_path = ? AND deleted_at IS NULL
 		`, input.GroupID, input.FieldPath).Scan(&id)
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	if input.ID > 0 {
+		_, err = s.db.ExecContext(ctx, `
+			UPDATE monitor_field_definitions
+			SET scope_type = ?, group_id = ?, item_id = ?, field_path = ?, display_name = ?,
+			    value_type = ?, unit = ?, required = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ? AND deleted_at IS NULL
+		`, input.ScopeType, input.GroupID, nullableInt(input.ItemID), input.FieldPath, input.DisplayName,
+			input.ValueType, input.Unit, boolToInt(*input.Required), boolToInt(*input.Enabled), id)
+		if err != nil {
+			return core.FieldDefinition{}, err
+		}
+	} else if errors.Is(err, sql.ErrNoRows) {
 		res, err := s.db.ExecContext(ctx, `
 			INSERT INTO monitor_field_definitions
 				(scope_type, group_id, item_id, field_path, display_name, value_type, unit, required, enabled)
@@ -560,10 +558,41 @@ func (s *Store) UpsertField(ctx context.Context, input core.FieldInput) (core.Fi
 }
 
 func (s *Store) DeleteField(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE monitor_field_definitions SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-	`, id)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var scopeType, fieldPath string
+	var groupID int64
+	var itemID sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT scope_type, group_id, item_id, field_path
+		FROM monitor_field_definitions
+		WHERE id = ?
+	`, id).Scan(&scopeType, &groupID, &itemID, &fieldPath); err != nil {
+		return err
+	}
+	if scopeType == "item" && itemID.Valid {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM alert_rules
+			WHERE scope_type = 'item' AND item_id = ? AND field_path = ?
+		`, itemID.Int64, fieldPath); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM alert_rules
+			WHERE scope_type = 'group' AND group_id = ? AND field_path = ?
+		`, groupID, fieldPath); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM monitor_field_definitions WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) fieldByID(ctx context.Context, id int64) (core.FieldDefinition, error) {
@@ -600,10 +629,15 @@ func (s *Store) ListChannels(ctx context.Context) ([]core.Channel, error) {
 
 func (s *Store) UpsertChannel(ctx context.Context, input core.ChannelInput) (core.Channel, error) {
 	var id int64
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id FROM notification_channels WHERE code = ? AND deleted_at IS NULL
-	`, input.Code).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
+	err := error(nil)
+	if input.ID > 0 {
+		id = input.ID
+	} else {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT id FROM notification_channels WHERE code = ? AND deleted_at IS NULL
+		`, input.Code).Scan(&id)
+	}
+	if input.ID == 0 && errors.Is(err, sql.ErrNoRows) {
 		res, err := s.db.ExecContext(ctx, `
 			INSERT INTO notification_channels (code, name, channel_type, config_json, enabled, is_default)
 			VALUES (?, ?, ?, ?, ?, ?)
@@ -628,9 +662,7 @@ func (s *Store) UpsertChannel(ctx context.Context, input core.ChannelInput) (cor
 }
 
 func (s *Store) DeleteChannel(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE notification_channels SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-	`, id)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM notification_channels WHERE id = ?`, id)
 	return err
 }
 
@@ -672,7 +704,29 @@ func (s *Store) ListRules(ctx context.Context) ([]core.AlertRule, error) {
 }
 
 func (s *Store) UpsertRule(ctx context.Context, input core.AlertRuleInput) (core.AlertRule, error) {
-	rule := core.AlertRule(input)
+	rule := core.AlertRule{
+		ID:                     input.ID,
+		Name:                   input.Name,
+		ScopeType:              input.ScopeType,
+		GroupID:                input.GroupID,
+		ItemID:                 input.ItemID,
+		FieldDefinitionID:      input.FieldDefinitionID,
+		SourceType:             input.SourceType,
+		RuleType:               input.RuleType,
+		FieldPath:              input.FieldPath,
+		ValueType:              input.ValueType,
+		Operator:               input.Operator,
+		ThresholdValue:         input.ThresholdValue,
+		AggregateFunc:          input.AggregateFunc,
+		AggregateWindowSeconds: input.AggregateWindowSeconds,
+		AggregateSampleCount:   input.AggregateSampleCount,
+		ConsecutiveCount:       input.ConsecutiveCount,
+		RecoveryCount:          input.RecoveryCount,
+		Severity:               input.Severity,
+		MessageTemplate:        input.MessageTemplate,
+		Enabled:                input.Enabled != nil && *input.Enabled,
+		ChannelIDs:             input.ChannelIDs,
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return core.AlertRule{}, err
@@ -734,9 +788,7 @@ func (s *Store) UpsertRule(ctx context.Context, input core.AlertRuleInput) (core
 }
 
 func (s *Store) DeleteRule(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE alert_rules SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-	`, id)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM alert_rules WHERE id = ?`, id)
 	return err
 }
 
@@ -967,7 +1019,7 @@ func (s *Store) Stats(ctx context.Context, groupID, itemID int64, fieldPath stri
 		FROM monitor_sample_values
 		WHERE group_id = ? AND item_id = ? AND field_path = ? AND received_at >= ?
 		ORDER BY received_at
-	`, groupID, itemID, fieldPath, since.Format(time.RFC3339Nano))
+	`, groupID, itemID, fieldPath, sqliteTime(since))
 	if err != nil {
 		return core.StatResult{}, err
 	}
@@ -1043,7 +1095,7 @@ func (s *Store) WindowValues(ctx context.Context, itemID int64, fieldPath string
 		WHERE item_id = ? AND field_path = ? AND received_at >= ? AND numeric_value IS NOT NULL
 		ORDER BY received_at DESC
 	`
-	args := []interface{}{itemID, fieldPath, since.Format(time.RFC3339Nano)}
+	args := []interface{}{itemID, fieldPath, sqliteTime(since)}
 	if limit > 0 {
 		query += " LIMIT ?"
 		args = append(args, limit)
@@ -1123,11 +1175,12 @@ func (s *Store) ApplyAlertEvaluation(ctx context.Context, rule core.AlertRule, s
 
 	var eventID int64
 	if eventType != "" {
-		title := fmt.Sprintf("%s %s", rule.Name, eventType)
+		title := fmt.Sprintf("%s %s", rule.Name, localizedEventType(ctx, tx, eventType))
 		message := rule.MessageTemplate
 		if message == "" {
-			message = fmt.Sprintf("rule=%s item=%s field=%s current=%s threshold=%s", rule.Name, sample.Name, rule.FieldPath, currentValue, threshold)
+			message = defaultAlertMessage(ctx, tx)
 		}
+		message = renderAlertMessage(message, rule, sample, currentValue, threshold)
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO alert_events
 				(rule_id, group_id, item_id, sample_id, event_type, severity, title, message,
@@ -1151,6 +1204,54 @@ func (s *Store) ApplyAlertEvaluation(ctx context.Context, rule core.AlertRule, s
 		return nil, err
 	}
 	return &event, nil
+}
+
+func localizedEventType(ctx context.Context, tx *sql.Tx, eventType string) string {
+	locale := settingValueTx(ctx, tx, "default_locale")
+	if locale == "zh-CN" {
+		switch eventType {
+		case "triggered":
+			return "触发"
+		case "recovered":
+			return "恢复"
+		}
+	}
+	switch eventType {
+	case "triggered":
+		return "Triggered"
+	case "recovered":
+		return "Recovered"
+	default:
+		return eventType
+	}
+}
+
+func defaultAlertMessage(ctx context.Context, tx *sql.Tx) string {
+	if settingValueTx(ctx, tx, "default_locale") == "zh-CN" {
+		return "规则={{rule}} 条目={{item}} 字段={{field}} 当前值={{current}} 阈值={{threshold}}"
+	}
+	return "rule={{rule}} item={{item}} field={{field}} current={{current}} threshold={{threshold}}"
+}
+
+func settingValueTx(ctx context.Context, tx *sql.Tx, key string) string {
+	var value string
+	_ = tx.QueryRowContext(ctx, `SELECT setting_value FROM system_settings WHERE setting_key = ?`, key).Scan(&value)
+	return value
+}
+
+func renderAlertMessage(message string, rule core.AlertRule, sample core.Sample, currentValue, threshold string) string {
+	replacements := map[string]string{
+		"{{rule}}":      rule.Name,
+		"{{item}}":      sample.Name,
+		"{{field}}":     rule.FieldPath,
+		"{{current}}":   currentValue,
+		"{{threshold}}": threshold,
+		"{{severity}}":  rule.Severity,
+	}
+	for key, value := range replacements {
+		message = strings.ReplaceAll(message, key, value)
+	}
+	return message
 }
 
 func (s *Store) ListEvents(ctx context.Context, limit int) ([]core.AlertEvent, error) {
@@ -1289,7 +1390,7 @@ type scanner interface {
 func scanGroup(row scanner) (core.Group, error) {
 	var group core.Group
 	var alertEnabled, enabled int
-	err := row.Scan(&group.ID, &group.Code, &group.Name, &group.Description, &group.DefaultIntervalSeconds,
+	err := row.Scan(&group.ID, &group.Code, &group.Name, &group.Icon, &group.Description, &group.DefaultIntervalSeconds,
 		&group.MissedTimesThreshold, &alertEnabled, &enabled, &group.CreatedAt, &group.UpdatedAt)
 	group.AlertEnabled = alertEnabled == 1
 	group.Enabled = enabled == 1
@@ -1429,6 +1530,10 @@ func nullableString(value string) interface{} {
 		return nil
 	}
 	return value
+}
+
+func sqliteTime(value time.Time) string {
+	return value.UTC().Format("2006-01-02 15:04:05")
 }
 
 func nullableFloat(value *float64) interface{} {

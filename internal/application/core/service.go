@@ -264,7 +264,7 @@ func (s *Service) ReceivePassive(ctx context.Context, payload PassivePayload) (i
 		ReportedAt:      reportedAt,
 		IntervalSeconds: payload.Interval,
 		Status:          "ok",
-		Raw:             raw,
+		Raw:             sampleRaw(values, raw),
 	}, values)
 	if err != nil {
 		return 0, err
@@ -316,6 +316,7 @@ func (s *Service) PollActiveRequest(ctx context.Context, req ActiveRequest) erro
 	}
 
 	activeID := req.ID
+	values := s.extractValuesFor(ctx, req.GroupID, req.ItemID, raw)
 	sample, err := s.store.SaveSample(ctx, SaveSampleInput{
 		GroupID:         req.GroupID,
 		ItemID:          req.ItemID,
@@ -326,9 +327,9 @@ func (s *Service) PollActiveRequest(ctx context.Context, req ActiveRequest) erro
 		Status:          sampleStatus,
 		HTTPStatusCode:  httpStatus,
 		LatencyMS:       latency,
-		Raw:             raw,
+		Raw:             sampleRaw(values, raw),
 		ErrorMessage:    errMsg,
-	}, s.extractValuesFor(ctx, req.GroupID, req.ItemID, raw))
+	}, values)
 	if err != nil {
 		return err
 	}
@@ -421,8 +422,12 @@ func (s *Service) EvaluateSample(ctx context.Context, sample Sample) error {
 	for _, value := range sample.Values {
 		valueMap[value.FieldPath] = value
 	}
+	itemOverride := itemOverridesGroup(fieldsForSample(ctx, s.store, sample))
 
 	for _, rule := range rules {
+		if itemOverride && rule.ScopeType == "group" && ruleUsesField(rule) {
+			continue
+		}
 		matched, currentValue := s.ruleMatched(ctx, rule, sample, valueMap)
 		event, err := s.store.ApplyAlertEvaluation(ctx, rule, sample, matched, currentValue, rule.ThresholdValue)
 		if err != nil {
@@ -576,10 +581,14 @@ func (s *Service) extractValues(data map[string]interface{}) []SampleValue {
 func (s *Service) extractValuesFor(ctx context.Context, groupID, itemID int64, data map[string]interface{}) []SampleValue {
 	fields, err := s.store.ListFields(ctx, groupID, itemID)
 	if err != nil || len(fields) == 0 {
-		return s.extractValues(data)
+		return nil
 	}
 
-	used := map[string]bool{}
+	fields = effectiveFields(fields)
+	if len(fields) == 0 {
+		return nil
+	}
+
 	values := make([]SampleValue, 0, len(fields))
 	for _, field := range fields {
 		if !field.Enabled {
@@ -593,13 +602,6 @@ func (s *Service) extractValuesFor(ctx context.Context, groupID, itemID int64, d
 			continue
 		}
 		values = append(values, coerceSampleValue(field.FieldPath, field.ValueType, raw))
-		used[field.FieldPath] = true
-	}
-
-	for _, inferred := range s.extractValues(data) {
-		if !used[inferred.FieldPath] {
-			values = append(values, inferred)
-		}
 	}
 	sort.Slice(values, func(i, j int) bool {
 		return values[i].FieldPath < values[j].FieldPath
@@ -607,10 +609,67 @@ func (s *Service) extractValuesFor(ctx context.Context, groupID, itemID int64, d
 	return values
 }
 
+func fieldsForSample(ctx context.Context, store Store, sample Sample) []FieldDefinition {
+	fields, err := store.ListFields(ctx, sample.GroupID, sample.ItemID)
+	if err != nil {
+		return nil
+	}
+	return fields
+}
+
+func itemOverridesGroup(fields []FieldDefinition) bool {
+	for _, field := range fields {
+		if field.ScopeType == "item" {
+			return true
+		}
+	}
+	return false
+}
+
+func ruleUsesField(rule AlertRule) bool {
+	return rule.RuleType == "field_condition" || rule.RuleType == "aggregate_condition"
+}
+
+func effectiveFields(fields []FieldDefinition) []FieldDefinition {
+	var itemFields []FieldDefinition
+	var groupFields []FieldDefinition
+	for _, field := range fields {
+		if field.ScopeType == "item" {
+			itemFields = append(itemFields, field)
+			continue
+		}
+		groupFields = append(groupFields, field)
+	}
+	if len(itemFields) > 0 {
+		return itemFields
+	}
+	return groupFields
+}
+
+func sampleRaw(values []SampleValue, fallback map[string]interface{}) map[string]interface{} {
+	if len(values) == 0 {
+		if errValue, ok := fallback["error"]; ok {
+			return map[string]interface{}{"error": errValue}
+		}
+		return map[string]interface{}{}
+	}
+	fields := make(map[string]interface{}, len(values))
+	for _, value := range values {
+		fields[value.FieldPath] = value.RawValue
+	}
+	return map[string]interface{}{"fields": fields}
+}
+
 func (s *Service) sendChannel(ctx context.Context, channel Channel, event AlertEvent) (string, string, error) {
 	var cfg map[string]interface{}
 	_ = json.Unmarshal([]byte(channel.ConfigJSON), &cfg)
-	text := fmt.Sprintf("[%s] %s\n%s", event.Severity, event.Title, event.Message)
+	locale := "zh-CN"
+	if settings, err := s.store.ListSettings(ctx); err == nil {
+		if value := settingValue(settings, "default_locale"); value != "" {
+			locale = value
+		}
+	}
+	text := fmt.Sprintf("[%s] %s\n%s", localizedSeverity(locale, event.Severity), event.Title, event.Message)
 
 	switch strings.ToLower(channel.Type) {
 	case "dingding", "dingtalk":
@@ -689,9 +748,9 @@ func compareValue(value SampleValue, operator, threshold string) bool {
 		case "ne":
 			return current != threshold
 		case "contains":
-			return strings.Contains(current, threshold)
+			return containsAny(current, threshold)
 		case "not_contains":
-			return !strings.Contains(current, threshold)
+			return !containsAny(current, threshold)
 		case "exists":
 			return true
 		case "not_exists":
@@ -699,6 +758,39 @@ func compareValue(value SampleValue, operator, threshold string) bool {
 		default:
 			return false
 		}
+	}
+}
+
+func containsAny(current, threshold string) bool {
+	for _, part := range strings.Split(threshold, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" && strings.Contains(current, part) {
+			return true
+		}
+	}
+	return false
+}
+
+func localizedSeverity(locale, severity string) string {
+	if locale == "zh-CN" {
+		switch severity {
+		case "info":
+			return "信息"
+		case "warning":
+			return "警告"
+		case "critical":
+			return "严重"
+		}
+	}
+	switch severity {
+	case "info":
+		return "Info"
+	case "warning":
+		return "Warning"
+	case "critical":
+		return "Critical"
+	default:
+		return severity
 	}
 }
 
@@ -961,6 +1053,10 @@ func normalizeUserInput(input UserInput) UserInput {
 func normalizeGroupInput(input GroupInput) GroupInput {
 	input.Code = strings.TrimSpace(input.Code)
 	input.Name = strings.TrimSpace(input.Name)
+	input.Icon = strings.TrimSpace(input.Icon)
+	if input.Icon == "" {
+		input.Icon = "Monitor"
+	}
 	if input.DefaultIntervalSeconds <= 0 {
 		input.DefaultIntervalSeconds = 60
 	}
@@ -1077,7 +1173,9 @@ func normalizeRuleInput(input AlertRuleInput) AlertRuleInput {
 	if input.Severity == "" {
 		input.Severity = "warning"
 	}
-	input.Enabled = true
+	if input.Enabled == nil {
+		input.Enabled = boolPtr(true)
+	}
 	return input
 }
 

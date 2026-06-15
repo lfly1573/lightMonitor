@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	migrations "lightmonitor/database"
 	"lightmonitor/internal/application/core"
@@ -108,5 +109,65 @@ func TestPassiveReceiveCoercesFieldsAndTriggersAlert(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].EventType != "triggered" {
 		t.Fatalf("events = %#v, want one triggered event", events)
+	}
+}
+
+func TestStatsUsesSQLiteComparableSinceTime(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.ExecContext(ctx, migrations.InstallSQL); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(db)
+	service := core.NewService(store)
+
+	group, err := service.CreateGroup(ctx, core.GroupInput{
+		Code:                   "stats",
+		Name:                   "Stats",
+		DefaultIntervalSeconds: 10,
+		MissedTimesThreshold:   3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.UpsertField(ctx, core.FieldInput{
+		ScopeType: "group",
+		GroupID:   group.ID,
+		FieldPath: "latency",
+		ValueType: "float",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.ReceivePassive(ctx, core.PassivePayload{
+		Group:    "stats",
+		Name:     "api",
+		Interval: 10,
+		Data:     map[string]interface{}{"latency": 12.3},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := service.Items(ctx, group.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+
+	stats, err := service.Stats(ctx, group.ID, items[0].ID, "latency", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Count != 1 || len(stats.Series) != 1 {
+		t.Fatalf("stats = %#v, want one point in last hour", stats)
 	}
 }

@@ -31,6 +31,7 @@ type Group struct {
 	ID                     int64  `json:"id"`
 	Code                   string `json:"code"`
 	Name                   string `json:"name"`
+	Icon                   string `json:"icon"`
 	Description            string `json:"description"`
 	DefaultIntervalSeconds int    `json:"default_interval_seconds"`
 	MissedTimesThreshold   int    `json:"missed_times_threshold"`
@@ -43,6 +44,7 @@ type Group struct {
 type GroupInput struct {
 	Code                   string `json:"code"`
 	Name                   string `json:"name"`
+	Icon                   string `json:"icon"`
 	Description            string `json:"description"`
 	DefaultIntervalSeconds int    `json:"default_interval_seconds"`
 	MissedTimesThreshold   int    `json:"missed_times_threshold"`
@@ -120,6 +122,7 @@ type FieldDefinition struct {
 }
 
 type FieldInput struct {
+	ID          int64  `json:"id"`
 	ScopeType   string `json:"scope_type"`
 	GroupID     int64  `json:"group_id"`
 	ItemID      *int64 `json:"item_id"`
@@ -142,6 +145,7 @@ type Channel struct {
 }
 
 type ChannelInput struct {
+	ID         int64  `json:"id"`
 	Code       string `json:"code"`
 	Name       string `json:"name"`
 	Type       string `json:"channel_type"`
@@ -174,7 +178,29 @@ type AlertRule struct {
 	ChannelIDs             []int64 `json:"channel_ids,omitempty"`
 }
 
-type AlertRuleInput AlertRule
+type AlertRuleInput struct {
+	ID                     int64   `json:"id"`
+	Name                   string  `json:"name"`
+	ScopeType              string  `json:"scope_type"`
+	GroupID                *int64  `json:"group_id,omitempty"`
+	ItemID                 *int64  `json:"item_id,omitempty"`
+	FieldDefinitionID      *int64  `json:"field_definition_id,omitempty"`
+	SourceType             string  `json:"source_type"`
+	RuleType               string  `json:"rule_type"`
+	FieldPath              string  `json:"field_path"`
+	ValueType              string  `json:"value_type"`
+	Operator               string  `json:"operator"`
+	ThresholdValue         string  `json:"threshold_value"`
+	AggregateFunc          string  `json:"aggregate_func"`
+	AggregateWindowSeconds *int    `json:"aggregate_window_seconds,omitempty"`
+	AggregateSampleCount   *int    `json:"aggregate_sample_count,omitempty"`
+	ConsecutiveCount       int     `json:"consecutive_count"`
+	RecoveryCount          int     `json:"recovery_count"`
+	Severity               string  `json:"severity"`
+	MessageTemplate        string  `json:"message_template"`
+	Enabled                *bool   `json:"enabled"`
+	ChannelIDs             []int64 `json:"channel_ids,omitempty"`
+}
 
 type PassivePayload struct {
 	Group     string                 `json:"group"`

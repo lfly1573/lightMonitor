@@ -11,6 +11,7 @@ type Group struct {
 	ID                     int64
 	Code                   string
 	Name                   string
+	Icon                   string
 	DefaultIntervalSeconds int
 	MissedTimesThreshold   int
 	AlertEnabled           bool
