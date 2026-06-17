@@ -40,8 +40,10 @@ type Store interface {
 	UpdateGroup(ctx context.Context, id int64, input GroupInput) (Group, error)
 	DeleteGroup(ctx context.Context, id int64) error
 	GetGroupByCode(ctx context.Context, code string) (Group, error)
+	GetGroupByID(ctx context.Context, id int64) (Group, error)
 
 	ListItems(ctx context.Context, groupID int64) ([]Item, error)
+	GetItemByID(ctx context.Context, id int64) (Item, error)
 	UpsertItem(ctx context.Context, input ItemInput) (Item, error)
 	UpdateItem(ctx context.Context, id int64, input ItemInput) (Item, error)
 	DeleteItem(ctx context.Context, id int64) error
@@ -214,63 +216,188 @@ func (s *Service) DeleteRule(ctx context.Context, id int64) error {
 	return s.store.DeleteRule(ctx, id)
 }
 
-func (s *Service) ReceivePassive(ctx context.Context, payload PassivePayload) (int, error) {
-	settings, err := s.store.ListSettings(ctx)
-	if err != nil {
-		return 0, err
-	}
-	token := settingValue(settings, "upload_token")
-	if token != "" && payload.Token != token {
-		return 0, ErrUnauthorized
-	}
-	if payload.Group == "" || payload.Name == "" {
-		return 0, ErrInvalidInput
-	}
-	if payload.Interval <= 0 {
-		payload.Interval = 60
-	}
+func isEmptyJSON(j string) bool {
+	j = strings.TrimSpace(j)
+	return j == "" || j == "{}"
+}
 
-	group, err := s.store.GetGroupByCode(ctx, payload.Group)
+func (s *Service) processSinglePassive(ctx context.Context, groupCode string, name string, interval int, timestamp interface{}, data map[string]interface{}, refItemID *int64) (Item, Group, error) {
+	group, err := s.store.GetGroupByCode(ctx, groupCode)
 	if err != nil {
-		return 0, err
+		return Item{}, Group{}, err
 	}
 	item, err := s.store.UpsertItem(ctx, ItemInput{
 		GroupID:              group.ID,
 		SourceType:           "passive",
-		Name:                 payload.Name,
-		IntervalSeconds:      payload.Interval,
+		Name:                 name,
+		IntervalSeconds:      interval,
 		MissedTimesThreshold: group.MissedTimesThreshold,
 		AlertEnabled:         boolPtr(true),
 		Enabled:              boolPtr(true),
+		RefItemID:            refItemID,
 	})
 	if err != nil {
-		return 0, err
+		return Item{}, Group{}, err
 	}
 
-	reportedAt := parseTimestamp(payload.Timestamp)
+	reportedAt := parseTimestamp(timestamp)
 	raw := map[string]interface{}{
-		"group":     payload.Group,
-		"name":      payload.Name,
-		"timestamp": payload.Timestamp,
-		"interval":  payload.Interval,
-		"data":      payload.Data,
+		"group":     groupCode,
+		"name":      name,
+		"timestamp": timestamp,
+		"interval":  interval,
+		"data":      data,
 	}
-	values := s.extractValuesFor(ctx, group.ID, item.ID, payload.Data)
+	values := s.extractValuesFor(ctx, group.ID, item.ID, data)
 	sample, err := s.store.SaveSample(ctx, SaveSampleInput{
 		GroupID:         group.ID,
 		ItemID:          item.ID,
 		SourceType:      "passive",
-		Name:            payload.Name,
+		Name:            name,
 		ReportedAt:      reportedAt,
-		IntervalSeconds: payload.Interval,
+		IntervalSeconds: interval,
 		Status:          "ok",
 		Raw:             sampleRaw(values, raw),
 	}, values)
 	if err != nil {
-		return 0, err
+		return Item{}, Group{}, err
 	}
 	_ = s.EvaluateSample(ctx, sample)
-	return item.IntervalSeconds, nil
+
+	// Process object_array fields
+	allFields, err := s.store.ListFields(ctx, group.ID, item.ID)
+	if err == nil {
+		effFields := effectiveFields(allFields)
+		for _, field := range effFields {
+			if field.Enabled && field.ValueType == "object_array" && field.RefGroupID != nil && *field.RefGroupID > 0 && field.RefNamePath != "" {
+				rawVal, ok := valueAtPath(data, field.FieldPath)
+				if ok {
+					var arr []interface{}
+					switch v := rawVal.(type) {
+					case []interface{}:
+						arr = v
+					case []map[string]interface{}:
+						for _, itm := range v {
+							arr = append(arr, itm)
+						}
+					default:
+						if sVal, ok := rawVal.(string); ok {
+							var parsed []interface{}
+							if err := json.Unmarshal([]byte(sVal), &parsed); err == nil {
+								arr = parsed
+							}
+						}
+					}
+					if len(arr) > 0 {
+						targetGroup, err := s.store.GetGroupByID(ctx, *field.RefGroupID)
+						if err == nil {
+							for _, subItemRaw := range arr {
+								if subItemMap, ok := subItemRaw.(map[string]interface{}); ok {
+									nameVal, ok := valueAtPath(subItemMap, field.RefNamePath)
+									if ok && nameVal != nil {
+										subName := strings.TrimSpace(fmt.Sprint(nameVal))
+										if subName != "" {
+											_, _, _ = s.processSinglePassive(ctx, targetGroup.Code, subName, interval, timestamp, subItemMap, &item.ID)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return item, group, nil
+}
+
+func (s *Service) ReceivePassive(ctx context.Context, payload PassivePayload) (int, map[string]interface{}, error) {
+	settings, err := s.store.ListSettings(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	token := settingValue(settings, "upload_token")
+	if token != "" && payload.Token != token {
+		return 0, nil, ErrUnauthorized
+	}
+
+	hasRoot := payload.Group != "" && payload.Name != ""
+	hasItems := len(payload.Items) > 0
+
+	if !hasRoot && !hasItems {
+		return 0, nil, ErrInvalidInput
+	}
+
+	if payload.Interval <= 0 {
+		payload.Interval = 60
+	}
+
+	var rootInterval int
+	var rootItem Item
+	var rootGroup Group
+	var rootErr error
+	hasRootProcessed := false
+
+	if hasRoot {
+		item, group, err := s.processSinglePassive(ctx, payload.Group, payload.Name, payload.Interval, payload.Timestamp, payload.Data, nil)
+		if err != nil {
+			rootErr = err
+		} else {
+			hasRootProcessed = true
+			rootItem = item
+			rootGroup = group
+			rootInterval = item.IntervalSeconds
+		}
+	}
+
+	var lastItemInterval int
+	hasItemProcessed := false
+	var lastItemErr error
+
+	for _, item := range payload.Items {
+		if item.Group == "" || item.Name == "" {
+			continue
+		}
+		itm, _, err := s.processSinglePassive(ctx, item.Group, item.Name, payload.Interval, payload.Timestamp, item.Data, nil)
+		if err != nil {
+			lastItemErr = err
+		} else {
+			hasItemProcessed = true
+			lastItemInterval = itm.IntervalSeconds
+		}
+	}
+
+	if !hasRootProcessed && !hasItemProcessed {
+		if rootErr != nil {
+			return 0, nil, rootErr
+		}
+		if lastItemErr != nil {
+			return 0, nil, lastItemErr
+		}
+		return 0, nil, ErrInvalidInput
+	}
+
+	setting := map[string]interface{}{}
+	if hasRootProcessed {
+		var rawSettings string
+		if !isEmptyJSON(rootItem.ResponseSettingsJSON) {
+			rawSettings = rootItem.ResponseSettingsJSON
+		} else if !isEmptyJSON(rootGroup.ResponseSettingsJSON) {
+			rawSettings = rootGroup.ResponseSettingsJSON
+		}
+		if rawSettings != "" {
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(rawSettings), &parsed); err == nil {
+				setting = parsed
+			}
+		}
+	}
+
+	if hasRootProcessed {
+		return rootInterval, setting, nil
+	}
+	return lastItemInterval, setting, nil
 }
 
 func (s *Service) Samples(ctx context.Context, groupID, itemID int64, limit int) ([]Sample, error) {
@@ -357,10 +484,12 @@ func (s *Service) CheckMissing(ctx context.Context) error {
 				continue
 			}
 			last, err := s.store.LastSample(ctx, item.ID)
-			if err != nil {
-				continue
+			lastAt := parseStoredTime(item.CreatedAt)
+			lastStatus := ""
+			if err == nil {
+				lastAt = parseStoredTime(last.ReceivedAt)
+				lastStatus = last.Status
 			}
-			lastAt := parseStoredTime(last.ReceivedAt)
 			threshold := item.MissedTimesThreshold
 			if threshold <= 0 {
 				threshold = groupMap[item.GroupID].MissedTimesThreshold
@@ -375,7 +504,7 @@ func (s *Service) CheckMissing(ctx context.Context) error {
 			if time.Since(lastAt) < time.Duration(interval*threshold)*time.Second {
 				continue
 			}
-			if last.Status == "missing" && time.Since(lastAt) < time.Duration(interval)*time.Second {
+			if lastStatus == "missing" && time.Since(lastAt) < time.Duration(interval)*time.Second {
 				continue
 			}
 			sample, err := s.store.SaveSample(ctx, SaveSampleInput{
@@ -414,6 +543,12 @@ func (s *Service) Cleanup(ctx context.Context) error {
 }
 
 func (s *Service) EvaluateSample(ctx context.Context, sample Sample) error {
+	// If the item has alerts disabled, do not evaluate or notify any alert rules
+	item, err := s.store.GetItemByID(ctx, sample.ItemID)
+	if err == nil && !item.AlertEnabled {
+		return nil
+	}
+
 	rules, err := s.store.AlertRulesForSample(ctx, sample)
 	if err != nil {
 		return err
@@ -669,7 +804,15 @@ func (s *Service) sendChannel(ctx context.Context, channel Channel, event AlertE
 			locale = value
 		}
 	}
-	text := fmt.Sprintf("[%s] %s\n%s", localizedSeverity(locale, event.Severity), event.Title, event.Message)
+	severityStr := localizedSeverity(locale, event.Severity)
+	if event.EventType == "recovered" {
+		if locale == "zh-CN" {
+			severityStr = "恢复"
+		} else {
+			severityStr = "Recovered"
+		}
+	}
+	text := fmt.Sprintf("[%s] %s\n%s", severityStr, event.Title, event.Message)
 
 	switch strings.ToLower(channel.Type) {
 	case "dingding", "dingtalk":
@@ -723,6 +866,34 @@ func (s *Service) postJSON(ctx context.Context, target string, body map[string]i
 
 func compareValue(value SampleValue, operator, threshold string) bool {
 	switch value.ValueType {
+	case "string_array":
+		var arr []string
+		_ = json.Unmarshal([]byte(value.StringValue), &arr)
+		arrLen := len(arr)
+		switch operator {
+		case "len_eq":
+			tVal, err := strconv.Atoi(threshold)
+			return err == nil && arrLen == tVal
+		case "len_gt":
+			tVal, err := strconv.Atoi(threshold)
+			return err == nil && arrLen > tVal
+		case "len_lt":
+			tVal, err := strconv.Atoi(threshold)
+			return err == nil && arrLen < tVal
+		case "len_ne":
+			tVal, err := strconv.Atoi(threshold)
+			return err == nil && arrLen != tVal
+		case "contains":
+			return arrayContainsAny(arr, threshold)
+		case "not_contains":
+			return !arrayContainsAny(arr, threshold)
+		case "exists":
+			return true
+		case "not_exists":
+			return false
+		default:
+			return false
+		}
 	case "integer", "float":
 		current := 0.0
 		if value.NumericValue != nil {
@@ -759,6 +930,21 @@ func compareValue(value SampleValue, operator, threshold string) bool {
 			return false
 		}
 	}
+}
+
+func arrayContainsAny(arr []string, threshold string) bool {
+	for _, part := range strings.Split(threshold, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		for _, item := range arr {
+			if strings.Contains(item, part) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func containsAny(current, threshold string) bool {
@@ -923,6 +1109,41 @@ func coerceSampleValue(path, valueType string, raw interface{}) SampleValue {
 		value.BooleanValue = &b
 		value.NumericValue = &n
 		return value
+	case "string_array":
+		var strArr []string
+		switch arr := raw.(type) {
+		case []interface{}:
+			for _, item := range arr {
+				if item != nil {
+					strArr = append(strArr, fmt.Sprint(item))
+				}
+			}
+		case []string:
+			strArr = arr
+		default:
+			if raw != nil {
+				if s, ok := raw.(string); ok {
+					var parsed []string
+					if err := json.Unmarshal([]byte(s), &parsed); err == nil {
+						strArr = parsed
+					} else {
+						strArr = []string{s}
+					}
+				} else {
+					strArr = []string{fmt.Sprint(raw)}
+				}
+			}
+		}
+		if strArr == nil {
+			strArr = []string{}
+		}
+		marshaled, _ := json.Marshal(strArr)
+		value.StringValue = string(marshaled)
+		return value
+	case "object_array":
+		marshaled, _ := json.Marshal(raw)
+		value.StringValue = string(marshaled)
+		return value
 	}
 	value.ValueType = "string"
 	value.StringValue = fmt.Sprint(raw)
@@ -949,8 +1170,15 @@ func toFloat(raw interface{}) (float64, bool) {
 }
 
 func valueAtPath(data map[string]interface{}, path string) (interface{}, bool) {
+	path = normalizeJSONFieldPath(path)
+	if path == "" {
+		return nil, false
+	}
 	current := interface{}(data)
 	for _, part := range strings.Split(path, ".") {
+		if part == "" {
+			continue
+		}
 		obj, ok := current.(map[string]interface{})
 		if !ok {
 			return nil, false
@@ -961,6 +1189,14 @@ func valueAtPath(data map[string]interface{}, path string) (interface{}, bool) {
 		}
 	}
 	return current, true
+}
+
+func normalizeJSONFieldPath(path string) string {
+	path = strings.TrimSpace(path)
+	path = strings.TrimPrefix(path, "$.")
+	path = strings.TrimPrefix(path, ".")
+	path = strings.TrimPrefix(path, "data.")
+	return path
 }
 
 func sampleValueString(value SampleValue) string {

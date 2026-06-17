@@ -541,3 +541,8 @@ body {
     flex: 1;
   }
 }
+
+.own-fields-text {
+  color: #d97706 !important;
+  font-weight: bold;
+}

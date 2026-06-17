@@ -55,12 +55,15 @@ func (h *APIHandler) Receive(c *gin.Context) {
 	if !bindJSON(c, &payload) {
 		return
 	}
-	interval, err := h.service.ReceivePassive(c.Request.Context(), payload)
+	interval, setting, err := h.service.ReceivePassive(c.Request.Context(), payload)
 	if err != nil {
 		writeError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, OK(gin.H{"interval": interval}))
+	c.JSON(http.StatusOK, OK(gin.H{
+		"interval": interval,
+		"setting":  setting,
+	}))
 }
 
 func (h *APIHandler) Dashboard(c *gin.Context) {

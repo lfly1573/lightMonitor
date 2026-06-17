@@ -196,10 +196,10 @@ func (s *Store) userByID(ctx context.Context, id int64) (core.User, error) {
 func (s *Store) ListGroups(ctx context.Context) ([]core.Group, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, code, name, icon, description, default_interval_seconds, missed_times_threshold,
-		       alert_enabled, enabled, created_at, updated_at
+		       alert_enabled, enabled, response_settings_json, created_at, updated_at, sort_order
 		FROM monitor_groups
 		WHERE deleted_at IS NULL
-		ORDER BY code
+		ORDER BY sort_order ASC, code ASC
 	`)
 	if err != nil {
 		return nil, err
@@ -220,9 +220,9 @@ func (s *Store) ListGroups(ctx context.Context) ([]core.Group, error) {
 func (s *Store) CreateGroup(ctx context.Context, input core.GroupInput) (core.Group, error) {
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO monitor_groups
-			(code, name, icon, description, default_interval_seconds, missed_times_threshold, alert_enabled, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, input.Code, input.Name, input.Icon, input.Description, input.DefaultIntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled))
+			(code, name, icon, description, default_interval_seconds, missed_times_threshold, alert_enabled, enabled, response_settings_json, sort_order)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, input.Code, input.Name, input.Icon, input.Description, input.DefaultIntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled), input.ResponseSettingsJSON, input.SortOrder)
 	if err != nil {
 		return core.Group{}, err
 	}
@@ -234,9 +234,9 @@ func (s *Store) UpdateGroup(ctx context.Context, id int64, input core.GroupInput
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE monitor_groups
 		SET code = ?, name = ?, icon = ?, description = ?, default_interval_seconds = ?,
-		    missed_times_threshold = ?, alert_enabled = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
+		    missed_times_threshold = ?, alert_enabled = ?, enabled = ?, response_settings_json = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND deleted_at IS NULL
-	`, input.Code, input.Name, input.Icon, input.Description, input.DefaultIntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled), id)
+	`, input.Code, input.Name, input.Icon, input.Description, input.DefaultIntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled), input.ResponseSettingsJSON, input.SortOrder, id)
 	if err != nil {
 		return core.Group{}, err
 	}
@@ -251,7 +251,7 @@ func (s *Store) DeleteGroup(ctx context.Context, id int64) error {
 func (s *Store) GetGroupByCode(ctx context.Context, code string) (core.Group, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, code, name, icon, description, default_interval_seconds, missed_times_threshold,
-		       alert_enabled, enabled, created_at, updated_at
+		       alert_enabled, enabled, response_settings_json, created_at, updated_at, sort_order
 		FROM monitor_groups
 		WHERE code = ? AND deleted_at IS NULL AND enabled = 1
 	`, code)
@@ -261,7 +261,7 @@ func (s *Store) GetGroupByCode(ctx context.Context, code string) (core.Group, er
 func (s *Store) groupByID(ctx context.Context, id int64) (core.Group, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, code, name, icon, description, default_interval_seconds, missed_times_threshold,
-		       alert_enabled, enabled, created_at, updated_at
+		       alert_enabled, enabled, response_settings_json, created_at, updated_at, sort_order
 		FROM monitor_groups
 		WHERE id = ? AND deleted_at IS NULL
 	`, id)
@@ -270,17 +270,19 @@ func (s *Store) groupByID(ctx context.Context, id int64) (core.Group, error) {
 
 func (s *Store) ListItems(ctx context.Context, groupID int64) ([]core.Item, error) {
 	query := `
-		SELECT id, group_id, source_type, name, description, interval_seconds,
-		       missed_times_threshold, alert_enabled, enabled, COALESCE(last_seen_at, ''), created_at
-		FROM monitor_items
-		WHERE deleted_at IS NULL
+		SELECT mi.id, mi.group_id, mi.source_type, mi.name, mi.description, mi.interval_seconds,
+		       mi.missed_times_threshold, mi.alert_enabled, mi.enabled, mi.response_settings_json,
+		       COALESCE(mi.last_seen_at, ''), mi.created_at, mi.ref_item_id, COALESCE(ref.name, '')
+		FROM monitor_items mi
+		LEFT JOIN monitor_items ref ON mi.ref_item_id = ref.id
+		WHERE mi.deleted_at IS NULL
 	`
 	args := []interface{}{}
 	if groupID > 0 {
-		query += " AND group_id = ?"
+		query += " AND mi.group_id = ?"
 		args = append(args, groupID)
 	}
-	query += " ORDER BY group_id, source_type, name"
+	query += " ORDER BY COALESCE(mi.last_seen_at, '') DESC, mi.name ASC"
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -308,9 +310,9 @@ func (s *Store) UpsertItem(ctx context.Context, input core.ItemInput) (core.Item
 	if errors.Is(err, sql.ErrNoRows) {
 		res, err := s.db.ExecContext(ctx, `
 			INSERT INTO monitor_items
-				(group_id, source_type, name, description, interval_seconds, missed_times_threshold, alert_enabled, enabled)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`, input.GroupID, input.SourceType, input.Name, input.Description, input.IntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled))
+				(group_id, source_type, name, description, interval_seconds, missed_times_threshold, alert_enabled, enabled, response_settings_json, ref_item_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, input.GroupID, input.SourceType, input.Name, input.Description, input.IntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled), defaultJSON(input.ResponseSettingsJSON), input.RefItemID)
 		if err != nil {
 			return core.Item{}, err
 		}
@@ -320,9 +322,9 @@ func (s *Store) UpsertItem(ctx context.Context, input core.ItemInput) (core.Item
 	} else {
 		_, err = s.db.ExecContext(ctx, `
 			UPDATE monitor_items
-			SET interval_seconds = ?, missed_times_threshold = ?, alert_enabled = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
+			SET interval_seconds = ?, updated_at = CURRENT_TIMESTAMP
 			WHERE id = ?
-		`, input.IntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled), id)
+		`, input.IntervalSeconds, id)
 		if err != nil {
 			return core.Item{}, err
 		}
@@ -330,13 +332,17 @@ func (s *Store) UpsertItem(ctx context.Context, input core.ItemInput) (core.Item
 	return s.itemByID(ctx, id)
 }
 
+func (s *Store) GetItemByID(ctx context.Context, id int64) (core.Item, error) {
+	return s.itemByID(ctx, id)
+}
+
 func (s *Store) UpdateItem(ctx context.Context, id int64, input core.ItemInput) (core.Item, error) {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE monitor_items
 		SET group_id = ?, source_type = ?, name = ?, description = ?, interval_seconds = ?,
-		    missed_times_threshold = ?, alert_enabled = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
+		    missed_times_threshold = ?, alert_enabled = ?, enabled = ?, response_settings_json = ?, ref_item_id = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND deleted_at IS NULL
-	`, input.GroupID, input.SourceType, input.Name, input.Description, input.IntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled), id)
+	`, input.GroupID, input.SourceType, input.Name, input.Description, input.IntervalSeconds, input.MissedTimesThreshold, boolToInt(*input.AlertEnabled), boolToInt(*input.Enabled), defaultJSON(input.ResponseSettingsJSON), input.RefItemID, id)
 	if err != nil {
 		return core.Item{}, err
 	}
@@ -350,10 +356,12 @@ func (s *Store) DeleteItem(ctx context.Context, id int64) error {
 
 func (s *Store) itemByID(ctx context.Context, id int64) (core.Item, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, group_id, source_type, name, description, interval_seconds,
-		       missed_times_threshold, alert_enabled, enabled, COALESCE(last_seen_at, ''), created_at
-		FROM monitor_items
-		WHERE id = ? AND deleted_at IS NULL
+		SELECT mi.id, mi.group_id, mi.source_type, mi.name, mi.description, mi.interval_seconds,
+		       mi.missed_times_threshold, mi.alert_enabled, mi.enabled, mi.response_settings_json,
+		       COALESCE(mi.last_seen_at, ''), mi.created_at, mi.ref_item_id, COALESCE(ref.name, '')
+		FROM monitor_items mi
+		LEFT JOIN monitor_items ref ON mi.ref_item_id = ref.id
+		WHERE mi.id = ? AND mi.deleted_at IS NULL
 	`, id)
 	return scanItem(row)
 }
@@ -474,7 +482,7 @@ func (s *Store) activeRequestByID(ctx context.Context, id int64) (core.ActiveReq
 
 func (s *Store) ListFields(ctx context.Context, groupID, itemID int64) ([]core.FieldDefinition, error) {
 	query := `
-		SELECT id, scope_type, group_id, item_id, field_path, display_name, value_type, unit, required, enabled
+		SELECT id, scope_type, group_id, item_id, field_path, display_name, value_type, unit, required, enabled, ref_group_id, COALESCE(ref_name_path, '')
 		FROM monitor_field_definitions
 		WHERE deleted_at IS NULL
 	`
@@ -525,19 +533,19 @@ func (s *Store) UpsertField(ctx context.Context, input core.FieldInput) (core.Fi
 		_, err = s.db.ExecContext(ctx, `
 			UPDATE monitor_field_definitions
 			SET scope_type = ?, group_id = ?, item_id = ?, field_path = ?, display_name = ?,
-			    value_type = ?, unit = ?, required = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
+			    value_type = ?, unit = ?, required = ?, enabled = ?, ref_group_id = ?, ref_name_path = ?, updated_at = CURRENT_TIMESTAMP
 			WHERE id = ? AND deleted_at IS NULL
 		`, input.ScopeType, input.GroupID, nullableInt(input.ItemID), input.FieldPath, input.DisplayName,
-			input.ValueType, input.Unit, boolToInt(*input.Required), boolToInt(*input.Enabled), id)
+			input.ValueType, input.Unit, boolToInt(*input.Required), boolToInt(*input.Enabled), nullableInt(input.RefGroupID), input.RefNamePath, id)
 		if err != nil {
 			return core.FieldDefinition{}, err
 		}
 	} else if errors.Is(err, sql.ErrNoRows) {
 		res, err := s.db.ExecContext(ctx, `
 			INSERT INTO monitor_field_definitions
-				(scope_type, group_id, item_id, field_path, display_name, value_type, unit, required, enabled)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, input.ScopeType, input.GroupID, nullableInt(input.ItemID), input.FieldPath, input.DisplayName, input.ValueType, input.Unit, boolToInt(*input.Required), boolToInt(*input.Enabled))
+				(scope_type, group_id, item_id, field_path, display_name, value_type, unit, required, enabled, ref_group_id, ref_name_path)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, input.ScopeType, input.GroupID, nullableInt(input.ItemID), input.FieldPath, input.DisplayName, input.ValueType, input.Unit, boolToInt(*input.Required), boolToInt(*input.Enabled), nullableInt(input.RefGroupID), input.RefNamePath)
 		if err != nil {
 			return core.FieldDefinition{}, err
 		}
@@ -547,9 +555,9 @@ func (s *Store) UpsertField(ctx context.Context, input core.FieldInput) (core.Fi
 	} else {
 		_, err = s.db.ExecContext(ctx, `
 			UPDATE monitor_field_definitions
-			SET display_name = ?, value_type = ?, unit = ?, required = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
+			SET display_name = ?, value_type = ?, unit = ?, required = ?, enabled = ?, ref_group_id = ?, ref_name_path = ?, updated_at = CURRENT_TIMESTAMP
 			WHERE id = ?
-		`, input.DisplayName, input.ValueType, input.Unit, boolToInt(*input.Required), boolToInt(*input.Enabled), id)
+		`, input.DisplayName, input.ValueType, input.Unit, boolToInt(*input.Required), boolToInt(*input.Enabled), nullableInt(input.RefGroupID), input.RefNamePath, id)
 		if err != nil {
 			return core.FieldDefinition{}, err
 		}
@@ -597,11 +605,15 @@ func (s *Store) DeleteField(ctx context.Context, id int64) error {
 
 func (s *Store) fieldByID(ctx context.Context, id int64) (core.FieldDefinition, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, scope_type, group_id, item_id, field_path, display_name, value_type, unit, required, enabled
+		SELECT id, scope_type, group_id, item_id, field_path, display_name, value_type, unit, required, enabled, ref_group_id, COALESCE(ref_name_path, '')
 		FROM monitor_field_definitions
 		WHERE id = ? AND deleted_at IS NULL
 	`, id)
 	return scanField(row)
+}
+
+func (s *Store) GetGroupByID(ctx context.Context, id int64) (core.Group, error) {
+	return s.groupByID(ctx, id)
 }
 
 func (s *Store) ListChannels(ctx context.Context) ([]core.Channel, error) {
@@ -1391,7 +1403,7 @@ func scanGroup(row scanner) (core.Group, error) {
 	var group core.Group
 	var alertEnabled, enabled int
 	err := row.Scan(&group.ID, &group.Code, &group.Name, &group.Icon, &group.Description, &group.DefaultIntervalSeconds,
-		&group.MissedTimesThreshold, &alertEnabled, &enabled, &group.CreatedAt, &group.UpdatedAt)
+		&group.MissedTimesThreshold, &alertEnabled, &enabled, &group.ResponseSettingsJSON, &group.CreatedAt, &group.UpdatedAt, &group.SortOrder)
 	group.AlertEnabled = alertEnabled == 1
 	group.Enabled = enabled == 1
 	return group, err
@@ -1400,10 +1412,19 @@ func scanGroup(row scanner) (core.Group, error) {
 func scanItem(row scanner) (core.Item, error) {
 	var item core.Item
 	var alertEnabled, enabled int
+	var refItemID sql.NullInt64
+	var refItemName sql.NullString
 	err := row.Scan(&item.ID, &item.GroupID, &item.SourceType, &item.Name, &item.Description,
-		&item.IntervalSeconds, &item.MissedTimesThreshold, &alertEnabled, &enabled, &item.LastSeenAt, &item.CreatedAt)
+		&item.IntervalSeconds, &item.MissedTimesThreshold, &alertEnabled, &enabled, &item.ResponseSettingsJSON,
+		&item.LastSeenAt, &item.CreatedAt, &refItemID, &refItemName)
 	item.AlertEnabled = alertEnabled == 1
 	item.Enabled = enabled == 1
+	if refItemID.Valid {
+		item.RefItemID = &refItemID.Int64
+	}
+	if refItemName.Valid {
+		item.RefItemName = refItemName.String
+	}
 	return item, err
 }
 
@@ -1420,12 +1441,18 @@ func scanActiveRequest(row scanner) (core.ActiveRequest, error) {
 func scanField(row scanner) (core.FieldDefinition, error) {
 	var field core.FieldDefinition
 	var itemID sql.NullInt64
+	var refGroupID sql.NullInt64
+	var refNamePath sql.NullString
 	var required, enabled int
 	err := row.Scan(&field.ID, &field.ScopeType, &field.GroupID, &itemID, &field.FieldPath, &field.DisplayName,
-		&field.ValueType, &field.Unit, &required, &enabled)
+		&field.ValueType, &field.Unit, &required, &enabled, &refGroupID, &refNamePath)
 	if itemID.Valid {
 		field.ItemID = &itemID.Int64
 	}
+	if refGroupID.Valid {
+		field.RefGroupID = &refGroupID.Int64
+	}
+	field.RefNamePath = refNamePath.String
 	field.Required = required == 1
 	field.Enabled = enabled == 1
 	return field, err
@@ -1495,6 +1522,13 @@ func boolToInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func defaultJSON(s string) string {
+	if s == "" {
+		return "{}"
+	}
+	return s
 }
 
 func nullableInt(value *int64) interface{} {

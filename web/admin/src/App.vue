@@ -36,6 +36,8 @@ interface Group {
   missed_times_threshold: number
   alert_enabled: boolean
   enabled: boolean
+  response_settings_json: string
+  sort_order: number
 }
 
 interface Item {
@@ -48,6 +50,9 @@ interface Item {
   missed_times_threshold: number
   alert_enabled: boolean
   enabled: boolean
+  response_settings_json: string
+  ref_item_id?: number
+  ref_item_name?: string
   last_seen_at?: string
 }
 
@@ -79,6 +84,8 @@ interface FieldDefinition {
   unit: string
   required: boolean
   enabled: boolean
+  ref_group_id?: number
+  ref_name_path?: string
 }
 
 interface Channel {
@@ -218,6 +225,8 @@ const groupForm = reactive({
   missed_times_threshold: 3,
   alert_enabled: true,
   enabled: true,
+  response_settings_json: '{}',
+  sort_order: 0,
 })
 const activeForm = reactive({
   id: 0,
@@ -243,6 +252,7 @@ const itemForm = reactive({
   missed_times_threshold: 3,
   alert_enabled: true,
   enabled: true,
+  response_settings_json: '{}',
 })
 const fieldForm = reactive({
   id: 0,
@@ -255,6 +265,8 @@ const fieldForm = reactive({
   unit: '',
   required: false,
   enabled: true,
+  ref_group_id: undefined as number | undefined,
+  ref_name_path: '',
 })
 const ruleForm = reactive({
   id: 0,
@@ -290,10 +302,14 @@ const channelForm = reactive({
   is_default: false,
 })
 
-const iconOptions = ['Monitor', 'Platform', 'Cpu', 'Connection', 'DataLine', 'TrendCharts', 'Bell', 'Folder', 'Histogram', 'Coin', 'SetUp', 'Odometer']
+const iconOptions = [
+  'Monitor', 'Platform', 'Cpu', 'Connection', 'DataLine', 'TrendCharts', 'Bell', 'Folder', 'Histogram',
+  'Coin', 'Box', 'Cloudy', 'Document', 'SetUp', 'Odometer', 'Link', 'Key', 'Share', 'Tickets'
+]
 
 const text = {
   'zh-CN': {
+    invalidJSON: '无效的 JSON 格式',
     install: '初始化系统',
     login: '登录',
     loginFailed: '账号或密码错误',
@@ -407,18 +423,24 @@ const text = {
       median: '中位数',
       title: '标题',
       message: '消息',
+      responseSettings: '被动返回参数 (JSON)',
+      refGroup: '对应分组',
+      refNamePath: '条目名称json字段',
+      refItem: '上级条目',
+      sortOrder: '排序',
     },
     yes: '是',
     no: '否',
     roles: { admin: '管理员', viewer: '查看者' },
     sourceTypes: { passive: '被动', active: '主动', any: '任意' },
-    valueTypes: { string: '字符串', integer: '整数', float: '浮点', boolean: '布尔' },
+    valueTypes: { string: '字符串', integer: '整数', float: '浮点', boolean: '布尔', object_array: '对象数组', string_array: '字符串数组' },
     ruleTypes: { missing_data: '缺失数据', request_failed: '请求失败', field_condition: '字段条件', aggregate_condition: '聚合条件' },
-    operators: { gt: '>', gte: '>=', lt: '<', lte: '<=', eq: '=', ne: '!=', contains: '包含', not_contains: '不包含', exists: '字段存在', not_exists: '字段不存在' },
+    operators: { gt: '>', gte: '>=', lt: '<', lte: '<=', eq: '=', ne: '!=', contains: '包含', not_contains: '不包含', exists: '字段存在', not_exists: '字段不存在', len_eq: '长度=', len_gt: '长度>', len_lt: '长度<', len_ne: '长度!=' },
     severities: { info: '信息', warning: '警告', critical: '严重' },
     channelTemplates: { dingding: '钉钉机器人报警', telegram: 'Telegram 报警' },
   },
   'en-US': {
+    invalidJSON: 'Invalid JSON format',
     install: 'Initialize',
     login: 'Login',
     loginFailed: 'Invalid username or password',
@@ -532,14 +554,19 @@ const text = {
       median: 'Median',
       title: 'Title',
       message: 'Message',
+      responseSettings: 'Passive Return Settings (JSON)',
+      refGroup: 'Target Group',
+      refNamePath: 'Item Name JSON Field',
+      refItem: 'Parent Item',
+      sortOrder: 'Sort Order',
     },
     yes: 'Yes',
     no: 'No',
     roles: { admin: 'Admin', viewer: 'Viewer' },
     sourceTypes: { passive: 'Passive', active: 'Active', any: 'Any' },
-    valueTypes: { string: 'String', integer: 'Integer', float: 'Float', boolean: 'Boolean' },
+    valueTypes: { string: 'String', integer: 'Integer', float: 'Float', boolean: 'Boolean', object_array: 'Object Array', string_array: 'String Array' },
     ruleTypes: { missing_data: 'Missing Data', request_failed: 'Request Failed', field_condition: 'Field Condition', aggregate_condition: 'Aggregate Condition' },
-    operators: { gt: '>', gte: '>=', lt: '<', lte: '<=', eq: '=', ne: '!=', contains: 'Contains', not_contains: 'Does Not Contain', exists: 'Field Exists', not_exists: 'Field Missing' },
+    operators: { gt: '>', gte: '>=', lt: '<', lte: '<=', eq: '=', ne: '!=', contains: 'Contains', not_contains: 'Does Not Contain', exists: 'Field Exists', not_exists: 'Field Missing', len_eq: 'Length =', len_gt: 'Length >', len_lt: 'Length <', len_ne: 'Length !=' },
     severities: { info: 'Info', warning: 'Warning', critical: 'Critical' },
     channelTemplates: { dingding: 'DingTalk Robot Alert', telegram: 'Telegram Alert' },
   },
@@ -558,6 +585,9 @@ const pagedSelectedGroupItems = computed(() => {
 const selectedGroupFields = computed(() => state.fields.filter((field) => field.scope_type === 'group' && field.group_id === selectedGroupID.value))
 const selectedGroupRules = computed(() => state.rules.filter((rule) => rule.scope_type === 'group' && rule.group_id === selectedGroupID.value))
 const selectedGroupEvents = computed(() => state.events.filter((event) => event.group_id === selectedGroupID.value))
+const hasObjectArrayFields = computed(() => {
+  return state.fields.some(field => field.value_type === 'object_array' && field.ref_group_id === selectedGroupID.value)
+})
 const alertPage = ref(1)
 const alertPageSize = ref(20)
 const groupEventPage = ref(1)
@@ -613,7 +643,6 @@ const timeZoneOptions = [
   'America/Sao_Paulo',
 ]
 const statHourOptions = [1, 6, 12, 24, 72, 168]
-const fieldOperatorOptions = ['gt', 'gte', 'lt', 'lte', 'eq', 'ne', 'contains', 'not_contains', 'exists', 'not_exists']
 const aggregateOperatorOptions = ['gt', 'gte', 'lt', 'lte', 'eq', 'ne']
 
 const systemMenus = computed(() => [
@@ -640,6 +669,10 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
     ...options,
   })
   const body = await res.json().catch(() => ({ code: res.status, msg: res.statusText }))
+  if (res.status === 401 || body.code === 401) {
+    currentUser.value = null
+    throw new Error('unauthorized')
+  }
   if (!res.ok || body.code !== 0) throw new Error(body.msg || 'request failed')
   return body.data
 }
@@ -657,6 +690,7 @@ async function initialize() {
 async function login() {
   try {
     currentUser.value = await api<User>('/api/auth/login', { method: 'POST', body: JSON.stringify(authForm) })
+    await loadInitialData()
     await loadAll()
   } catch {
     ElMessage.error(t.value.loginFailed)
@@ -668,35 +702,68 @@ async function logout() {
   currentUser.value = null
 }
 
-async function loadAll() {
-  const [dashboard, settings, users, groups, items, activeRequests, fields, channels, rules, samples, events] = await Promise.all([
-    api<typeof state.dashboard>('/api/dashboard'),
+async function loadInitialData() {
+  const [settings, channels, groups] = await Promise.all([
     api<Setting[]>('/api/settings'),
-    api<User[]>('/api/users'),
-    api<Group[]>('/api/groups'),
-    api<Item[]>('/api/items'),
-    api<ActiveRequest[]>('/api/active-requests'),
-    api<FieldDefinition[]>('/api/fields'),
     api<Channel[]>('/api/channels'),
-    api<AlertRule[]>('/api/rules'),
-    api<Sample[]>('/api/samples?limit=500'),
-    api<AlertEvent[]>('/api/events?limit=500'),
+    api<Group[]>('/api/groups'),
   ])
-  state.dashboard = dashboard || state.dashboard
   state.settings = settings || []
-  state.users = users || []
-  state.groups = groups || []
-  state.items = items || []
-  state.activeRequests = activeRequests || []
-  state.fields = fields || []
   state.channels = channels || []
-  state.rules = rules || []
-  state.samples = samples || []
-  state.events = events || []
+  state.groups = groups || []
+}
+
+async function loadPageData(menu: string) {
+  if (!currentUser.value) return
+
+  if (menu === 'overview') {
+    const [dashboard, groups, items, samples, events] = await Promise.all([
+      api<typeof state.dashboard>('/api/dashboard'),
+      api<Group[]>('/api/groups'),
+      api<Item[]>('/api/items'),
+      api<Sample[]>('/api/samples?limit=500'),
+      api<AlertEvent[]>('/api/events?limit=500'),
+    ])
+    state.dashboard = dashboard || state.dashboard
+    state.groups = groups || []
+    state.items = items || []
+    state.samples = samples || []
+    state.events = events || []
+    await nextTick()
+    renderOverviewCharts()
+  } else if (menu === 'groups') {
+    state.groups = await api<Group[]>('/api/groups') || []
+  } else if (menu === 'users') {
+    state.users = await api<User[]>('/api/users') || []
+  } else if (menu === 'settings') {
+    state.settings = await api<Setting[]>('/api/settings') || []
+  } else if (menu === 'channels') {
+    state.channels = await api<Channel[]>('/api/channels') || []
+  } else if (menu === 'alert-records') {
+    state.events = await api<AlertEvent[]>('/api/events?limit=500') || []
+  } else if (menu.startsWith('group:')) {
+    const groupID = Number(menu.slice(6))
+    const [items, activeRequests, fields, rules, samples, events] = await Promise.all([
+      api<Item[]>(`/api/items?group_id=${groupID}`),
+      api<ActiveRequest[]>('/api/active-requests'),
+      api<FieldDefinition[]>('/api/fields'),
+      api<AlertRule[]>('/api/rules'),
+      api<Sample[]>(`/api/samples?group_id=${groupID}&limit=500`),
+      api<AlertEvent[]>('/api/events?limit=500'),
+    ])
+    state.items = items || []
+    state.activeRequests = activeRequests || []
+    state.fields = fields || []
+    state.rules = rules || []
+    state.samples = samples || []
+    state.events = events || []
+  }
+}
+
+async function loadAll() {
+  await loadPageData(activeMenu.value)
   if (!menuExists(activeMenu.value)) activeMenu.value = 'overview'
   syncHash()
-  await nextTick()
-  renderOverviewCharts()
 }
 
 async function refreshAll() {
@@ -781,10 +848,10 @@ function openDrawer(type: DrawerType, mode: DrawerMode, row?: unknown, context: 
 
 function resetForm(type: DrawerType, context: Record<string, unknown>) {
   if (type === 'user') Object.assign(userForm, { id: 0, username: '', password: '', display_name: '', role: 'viewer', enabled: true })
-  if (type === 'group') Object.assign(groupForm, { id: 0, code: '', name: '', icon: 'Monitor', description: '', default_interval_seconds: 60, missed_times_threshold: 3, alert_enabled: true, enabled: true })
+  if (type === 'group') Object.assign(groupForm, { id: 0, code: '', name: '', icon: 'Monitor', description: '', default_interval_seconds: 60, missed_times_threshold: 3, alert_enabled: true, enabled: true, response_settings_json: '{}', sort_order: 0 })
   if (type === 'active') Object.assign(activeForm, { id: 0, group_id: Number(context.group_id || selectedGroupID.value), name: '', url: '', method: 'GET', headers_json: '{}', body_type: 'none', body_json: '{}', interval_seconds: 60, timeout_seconds: 10, expected_status_code: 200, enabled: true })
-  if (type === 'item') Object.assign(itemForm, { id: 0, group_id: Number(context.group_id || selectedGroupID.value), source_type: 'passive', name: '', description: '', interval_seconds: 60, missed_times_threshold: 3, alert_enabled: true, enabled: true })
-  if (type === 'field') Object.assign(fieldForm, { id: 0, scope_type: context.scope_type || 'group', group_id: Number(context.group_id || selectedGroupID.value), item_id: context.item_id as number | undefined, field_path: '', display_name: '', value_type: 'float', unit: '', required: false, enabled: true })
+  if (type === 'item') Object.assign(itemForm, { id: 0, group_id: Number(context.group_id || selectedGroupID.value), source_type: 'passive', name: '', description: '', interval_seconds: 60, missed_times_threshold: 3, alert_enabled: true, enabled: true, response_settings_json: '{}' })
+  if (type === 'field') Object.assign(fieldForm, { id: 0, scope_type: context.scope_type || 'group', group_id: Number(context.group_id || selectedGroupID.value), item_id: context.item_id as number | undefined, field_path: '', display_name: '', value_type: 'float', unit: '', required: false, enabled: true, ref_group_id: undefined, ref_name_path: '' })
   if (type === 'rule') {
     const fields = fieldsForRuleContext(context.scope_type === 'item' ? 'item' : 'group', Number(context.group_id || selectedGroupID.value), context.item_id as number | undefined)
     Object.assign(ruleForm, { id: 0, name: '', scope_type: context.scope_type || 'group', group_id: context.group_id || selectedGroupID.value || undefined, item_id: context.item_id as number | undefined, source_type: 'any', rule_type: 'field_condition', field_path: String(context.field_path || fields[0]?.field_path || ''), value_type: fields[0]?.value_type || 'float', operator: 'gt', threshold_value: '', aggregate_func: 'avg', aggregate_window_seconds: 300, aggregate_sample_count: undefined, consecutive_count: 1, recovery_count: 1, severity: 'warning', message_template: locale.value === 'zh-CN' ? '{{item}} {{field}} 当前值={{current}} 阈值={{threshold}}' : '{{item}} {{field}} current={{current}} threshold={{threshold}}', enabled: true, channel_ids: [] })
@@ -830,6 +897,12 @@ async function submitUser() {
 }
 
 async function submitGroup() {
+  try {
+    JSON.parse(groupForm.response_settings_json || '{}')
+  } catch {
+    ElMessage.error(t.value.invalidJSON || 'Invalid JSON format')
+    return
+  }
   groupForm.alert_enabled = true
   const body = JSON.stringify(groupForm)
   if (drawer.mode === 'edit') await api(`/api/groups/${groupForm.id}`, { method: 'PUT', body })
@@ -843,6 +916,12 @@ async function submitActive() {
 }
 
 async function submitItem() {
+  try {
+    JSON.parse(itemForm.response_settings_json || '{}')
+  } catch {
+    ElMessage.error(t.value.invalidJSON || 'Invalid JSON format')
+    return
+  }
   const body = JSON.stringify(itemForm)
   if (drawer.mode === 'edit') await api(`/api/items/${itemForm.id}`, { method: 'PUT', body })
   else await api('/api/items', { method: 'POST', body })
@@ -954,6 +1033,15 @@ function fieldsForRuleContext(scopeType = ruleForm.scope_type, groupID = Number(
 }
 
 const ruleFieldOptions = computed(() => fieldsForRuleContext())
+
+const fieldOperatorOptions = computed(() => {
+  const fieldPath = ruleForm.field_path
+  const field = ruleFieldOptions.value.find((f) => f.field_path === fieldPath)
+  if (field && field.value_type === 'string_array') {
+    return ['len_eq', 'len_gt', 'len_lt', 'len_ne', 'contains', 'not_contains', 'exists', 'not_exists']
+  }
+  return ['gt', 'gte', 'lt', 'lte', 'eq', 'ne', 'contains', 'not_contains', 'exists', 'not_exists']
+})
 
 function isFieldRuleType(ruleType = ruleForm.rule_type) {
   return ruleType === 'field_condition' || ruleType === 'aggregate_condition'
@@ -1067,6 +1155,14 @@ function sampleValue(sample: Sample | undefined, fieldPath: string) {
 
 function valueText(value?: SampleValue) {
   if (!value) return '-'
+  if (value.value_type === 'string_array' || value.value_type === 'object_array') {
+    try {
+      const arr = JSON.parse(value.string_value || '[]')
+      return Array.isArray(arr) ? String(arr.length) : '0'
+    } catch {
+      return '0'
+    }
+  }
   if (value.raw_value !== undefined && value.raw_value !== null) return String(value.raw_value)
   if (value.string_value !== undefined) return value.string_value
   if (value.integer_value !== undefined) return String(value.integer_value)
@@ -1128,6 +1224,12 @@ function applyRuleField(fieldPath: string) {
   ruleForm.field_path = fieldPath
   if (field) {
     ruleForm.value_type = field.value_type
+    const allowed = field.value_type === 'string_array'
+      ? ['len_eq', 'len_gt', 'len_lt', 'len_ne', 'contains', 'not_contains', 'exists', 'not_exists']
+      : ['gt', 'gte', 'lt', 'lte', 'eq', 'ne', 'contains', 'not_contains', 'exists', 'not_exists']
+    if (!allowed.includes(ruleForm.operator)) {
+      ruleForm.operator = allowed[0]
+    }
   }
 }
 
@@ -1270,6 +1372,7 @@ onMounted(async () => {
   if (installed.value) {
     try {
       currentUser.value = await api<User>('/api/auth/me')
+      await loadInitialData()
       await loadAll()
     } catch {
       currentUser.value = null
@@ -1310,6 +1413,16 @@ watch([selectedTimeZone, locale], () => {
 
 watch(() => fieldDetail.visible, (visible) => {
   if (visible) nextTick(() => renderFieldTrendChart())
+})
+
+watch(activeMenu, async () => {
+  if (currentUser.value) {
+    try {
+      await loadAll()
+    } catch (err) {
+      console.error('auto refresh failed:', err)
+    }
+  }
 })
 </script>
 
@@ -1443,6 +1556,7 @@ watch(() => fieldDetail.visible, (visible) => {
               <el-table-column prop="code" :label="t.field.code" />
               <el-table-column prop="name" :label="t.field.name" />
               <el-table-column prop="default_interval_seconds" :label="t.field.intervalSeconds" />
+              <el-table-column prop="missed_times_threshold" :label="t.field.missedTimes" />
               <el-table-column :label="t.field.enabled"><template #default="{ row }">{{ row.enabled ? t.yes : t.no }}</template></el-table-column>
               <el-table-column v-if="isAdmin" :label="t.field.action" width="150">
                 <template #default="{ row }">
@@ -1632,7 +1746,8 @@ watch(() => fieldDetail.visible, (visible) => {
                       </div>
                     </template>
                   </el-table-column>
-                  <el-table-column prop="name" :label="t.field.name" min-width="130" />
+                  <el-table-column prop="name" :label="t.field.name" min-width="180" />
+                  <el-table-column v-if="hasObjectArrayFields" prop="ref_item_name" :label="t.field.refItem" min-width="130" />
                   <el-table-column :label="t.field.source" width="90"><template #default="{ row }">{{ local(t.sourceTypes, row.source_type) }}</template></el-table-column>
                   <el-table-column :label="t.field.status" width="90"><template #default="{ row }"><el-tag :type="latestSample(row.id)?.status === 'ok' ? 'success' : 'warning'">{{ latestSample(row.id)?.status || '-' }}</el-tag></template></el-table-column>
                   <el-table-column :label="t.labels.latestFields" min-width="260">
@@ -1652,12 +1767,16 @@ watch(() => fieldDetail.visible, (visible) => {
                     </template>
                   </el-table-column>
                   <el-table-column :label="t.labels.inheritedFields" min-width="130">
-                    <template #default="{ row }">{{ itemFieldMode(row.id) }}</template>
+                    <template #default="{ row }">
+                      <span :class="{ 'own-fields-text': ownItemFields(row.id).length }">
+                        {{ itemFieldMode(row.id) }}
+                      </span>
+                    </template>
                   </el-table-column>
                   <el-table-column :label="t.field.lastSeen" min-width="170">
                     <template #default="{ row }">{{ formatDateTime(row.last_seen_at) }}</template>
                   </el-table-column>
-                  <el-table-column v-if="isAdmin" :label="t.field.action" width="260">
+                  <el-table-column v-if="isAdmin" :label="t.field.action" width="130">
                     <template #default="{ row }">
                       <el-button link type="primary" @click="activeForItem(row.id) ? openDrawer('active', 'edit', activeForItem(row.id)) : openDrawer('item', 'edit', row)">{{ t.edit }}</el-button>
                       <el-button link type="danger" @click="deleteEntity(row.source_type === 'active' && activeForItem(row.id) ? 'active' : 'item', activeForItem(row.id)?.id || row.id)">{{ t.delete }}</el-button>
@@ -1770,6 +1889,9 @@ watch(() => fieldDetail.visible, (visible) => {
           </el-form-item>
           <el-form-item :label="t.field.description"><el-input v-model="groupForm.description" type="textarea" /></el-form-item>
           <el-form-item :label="t.field.intervalSeconds"><el-input-number v-model="groupForm.default_interval_seconds" :min="1" /></el-form-item>
+          <el-form-item :label="t.field.missedTimes"><el-input-number v-model="groupForm.missed_times_threshold" :min="1" /></el-form-item>
+          <el-form-item :label="t.field.responseSettings"><el-input v-model="groupForm.response_settings_json" type="textarea" /></el-form-item>
+          <el-form-item :label="t.field.sortOrder"><el-input-number v-model="groupForm.sort_order" :min="0" /></el-form-item>
           <el-form-item :label="t.field.enabled"><el-switch v-model="groupForm.enabled" /></el-form-item>
         </template>
 
@@ -1789,10 +1911,11 @@ watch(() => fieldDetail.visible, (visible) => {
         <template v-if="drawer.type === 'item'">
           <el-form-item :label="t.field.name"><el-input v-model="itemForm.name" /></el-form-item>
           <el-form-item :label="t.field.description"><el-input v-model="itemForm.description" type="textarea" /></el-form-item>
-          <el-form-item :label="t.field.source"><el-select v-model="itemForm.source_type"><el-option :label="t.sourceTypes.passive" value="passive" /><el-option :label="t.sourceTypes.active" value="active" /></el-select></el-form-item>
+          <el-form-item v-if="drawer.mode !== 'edit'" :label="t.field.source"><el-select v-model="itemForm.source_type"><el-option :label="t.sourceTypes.passive" value="passive" /><el-option :label="t.sourceTypes.active" value="active" /></el-select></el-form-item>
           <el-form-item :label="t.field.intervalSeconds"><el-input-number v-model="itemForm.interval_seconds" :min="1" /></el-form-item>
           <el-form-item :label="t.field.missedTimes"><el-input-number v-model="itemForm.missed_times_threshold" :min="1" /></el-form-item>
           <el-form-item :label="t.field.alert"><el-switch v-model="itemForm.alert_enabled" /></el-form-item>
+          <el-form-item v-if="itemForm.source_type === 'passive'" :label="t.field.responseSettings"><el-input v-model="itemForm.response_settings_json" type="textarea" /></el-form-item>
           <el-form-item :label="t.field.enabled"><el-switch v-model="itemForm.enabled" /></el-form-item>
         </template>
 
@@ -1800,7 +1923,27 @@ watch(() => fieldDetail.visible, (visible) => {
           <el-alert v-if="fieldForm.scope_type === 'item'" type="warning" :closable="false" :title="t.overridden" />
           <el-form-item :label="t.field.displayName"><el-input v-model="fieldForm.display_name" /></el-form-item>
           <el-form-item :label="t.field.fieldPath"><el-input v-model="fieldForm.field_path" /></el-form-item>
-          <el-form-item :label="t.field.valueType"><el-select v-model="fieldForm.value_type"><el-option v-for="(label, value) in t.valueTypes" :key="value" :label="label" :value="value" /></el-select></el-form-item>
+          <el-form-item :label="t.field.valueType">
+            <el-select v-model="fieldForm.value_type">
+              <el-option
+                v-for="(label, value) in t.valueTypes"
+                v-show="fieldForm.scope_type === 'group' || value !== 'object_array'"
+                :key="value"
+                :label="label"
+                :value="value"
+              />
+            </el-select>
+          </el-form-item>
+          <template v-if="fieldForm.value_type === 'object_array'">
+            <el-form-item :label="t.field.refGroup" required>
+              <el-select v-model="fieldForm.ref_group_id" filterable>
+                <el-option v-for="g in state.groups" :key="g.id" :label="g.name" :value="g.id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item :label="t.field.refNamePath">
+              <el-input v-model="fieldForm.ref_name_path" placeholder="e.g. device_name" />
+            </el-form-item>
+          </template>
           <el-form-item :label="t.field.unit"><el-input v-model="fieldForm.unit" /></el-form-item>
           <el-form-item :label="t.field.required"><el-switch v-model="fieldForm.required" /></el-form-item>
           <el-form-item :label="t.field.enabled"><el-switch v-model="fieldForm.enabled" /></el-form-item>

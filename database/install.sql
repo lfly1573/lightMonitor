@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS monitor_groups (
         CHECK (missed_times_threshold > 0),
     alert_enabled INTEGER NOT NULL DEFAULT 1 CHECK (alert_enabled IN (0, 1)),
     enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    response_settings_json TEXT NOT NULL DEFAULT '{}',
+    sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at TEXT
@@ -73,13 +75,17 @@ CREATE TABLE IF NOT EXISTS monitor_items (
         CHECK (missed_times_threshold > 0),
     alert_enabled INTEGER NOT NULL DEFAULT 1 CHECK (alert_enabled IN (0, 1)),
     enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    response_settings_json TEXT NOT NULL DEFAULT '{}',
+    ref_item_id INTEGER DEFAULT NULL,
     last_seen_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at TEXT,
     FOREIGN KEY (group_id) REFERENCES monitor_groups (id)
         ON UPDATE CASCADE
-        ON DELETE CASCADE
+        ON DELETE CASCADE,
+    FOREIGN KEY (ref_item_id) REFERENCES monitor_items (id)
+        ON DELETE SET NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_items_group_source_name_active
@@ -128,10 +134,12 @@ CREATE TABLE IF NOT EXISTS monitor_field_definitions (
     field_path TEXT NOT NULL,
     display_name TEXT NOT NULL DEFAULT '',
     value_type TEXT NOT NULL
-        CHECK (value_type IN ('string', 'integer', 'float', 'boolean')),
+        CHECK (value_type IN ('string', 'integer', 'float', 'boolean', 'object_array', 'string_array')),
     unit TEXT NOT NULL DEFAULT '',
     required INTEGER NOT NULL DEFAULT 0 CHECK (required IN (0, 1)),
     enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    ref_group_id INTEGER,
+    ref_name_path TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at TEXT,
@@ -144,7 +152,10 @@ CREATE TABLE IF NOT EXISTS monitor_field_definitions (
         ON DELETE CASCADE,
     FOREIGN KEY (item_id) REFERENCES monitor_items (id)
         ON UPDATE CASCADE
-        ON DELETE CASCADE
+        ON DELETE CASCADE,
+    FOREIGN KEY (ref_group_id) REFERENCES monitor_groups (id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_field_defs_group_path_active
@@ -203,7 +214,7 @@ CREATE TABLE IF NOT EXISTS monitor_sample_values (
     field_definition_id INTEGER,
     field_path TEXT NOT NULL,
     value_type TEXT NOT NULL
-        CHECK (value_type IN ('string', 'integer', 'float', 'boolean')),
+        CHECK (value_type IN ('string', 'integer', 'float', 'boolean', 'object_array', 'string_array')),
     string_value TEXT,
     integer_value INTEGER,
     float_value REAL,
@@ -297,11 +308,11 @@ CREATE TABLE IF NOT EXISTS alert_rules (
         CHECK (rule_type IN ('missing_data', 'request_failed', 'field_condition', 'aggregate_condition')),
     field_path TEXT,
     value_type TEXT
-        CHECK (value_type IS NULL OR value_type IN ('string', 'integer', 'float', 'boolean')),
+        CHECK (value_type IS NULL OR value_type IN ('string', 'integer', 'float', 'boolean', 'object_array', 'string_array')),
     operator TEXT
         CHECK (
             operator IS NULL
-            OR operator IN ('gt', 'gte', 'lt', 'lte', 'eq', 'ne', 'contains', 'not_contains', 'exists', 'not_exists')
+            OR operator IN ('gt', 'gte', 'lt', 'lte', 'eq', 'ne', 'contains', 'not_contains', 'exists', 'not_exists', 'len_eq', 'len_gt', 'len_lt', 'len_ne')
         ),
     threshold_value TEXT,
     aggregate_func TEXT

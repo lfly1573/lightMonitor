@@ -37,6 +37,8 @@ type Group struct {
 	MissedTimesThreshold   int    `json:"missed_times_threshold"`
 	AlertEnabled           bool   `json:"alert_enabled"`
 	Enabled                bool   `json:"enabled"`
+	ResponseSettingsJSON   string `json:"response_settings_json"`
+	SortOrder              int    `json:"sort_order"`
 	CreatedAt              string `json:"created_at,omitempty"`
 	UpdatedAt              string `json:"updated_at,omitempty"`
 }
@@ -50,6 +52,8 @@ type GroupInput struct {
 	MissedTimesThreshold   int    `json:"missed_times_threshold"`
 	AlertEnabled           *bool  `json:"alert_enabled"`
 	Enabled                *bool  `json:"enabled"`
+	ResponseSettingsJSON   string `json:"response_settings_json"`
+	SortOrder              int    `json:"sort_order"`
 }
 
 type Item struct {
@@ -61,7 +65,10 @@ type Item struct {
 	IntervalSeconds      int    `json:"interval_seconds"`
 	MissedTimesThreshold int    `json:"missed_times_threshold"`
 	AlertEnabled         bool   `json:"alert_enabled"`
-	Enabled              bool   `json:"enabled"`
+	Enabled                bool   `json:"enabled"`
+	ResponseSettingsJSON   string `json:"response_settings_json"`
+	RefItemID            *int64 `json:"ref_item_id,omitempty"`
+	RefItemName          string `json:"ref_item_name,omitempty"`
 	LastSeenAt           string `json:"last_seen_at,omitempty"`
 	CreatedAt            string `json:"created_at,omitempty"`
 }
@@ -75,6 +82,8 @@ type ItemInput struct {
 	MissedTimesThreshold int    `json:"missed_times_threshold"`
 	AlertEnabled         *bool  `json:"alert_enabled"`
 	Enabled              *bool  `json:"enabled"`
+	ResponseSettingsJSON   string `json:"response_settings_json"`
+	RefItemID            *int64 `json:"ref_item_id,omitempty"`
 }
 
 type ActiveRequest struct {
@@ -119,6 +128,8 @@ type FieldDefinition struct {
 	Unit        string `json:"unit"`
 	Required    bool   `json:"required"`
 	Enabled     bool   `json:"enabled"`
+	RefGroupID  *int64 `json:"ref_group_id,omitempty"`
+	RefNamePath string `json:"ref_name_path,omitempty"`
 }
 
 type FieldInput struct {
@@ -132,6 +143,8 @@ type FieldInput struct {
 	Unit        string `json:"unit"`
 	Required    *bool  `json:"required"`
 	Enabled     *bool  `json:"enabled"`
+	RefGroupID  *int64 `json:"ref_group_id"`
+	RefNamePath string `json:"ref_name_path"`
 }
 
 type Channel struct {
@@ -202,6 +215,12 @@ type AlertRuleInput struct {
 	ChannelIDs             []int64 `json:"channel_ids,omitempty"`
 }
 
+type PassiveSubItem struct {
+	Group string                 `json:"group"`
+	Name  string                 `json:"name"`
+	Data  map[string]interface{} `json:"data"`
+}
+
 type PassivePayload struct {
 	Group     string                 `json:"group"`
 	Name      string                 `json:"name"`
@@ -209,6 +228,7 @@ type PassivePayload struct {
 	Timestamp interface{}            `json:"timestamp"`
 	Interval  int                    `json:"interval"`
 	Data      map[string]interface{} `json:"data"`
+	Items     []PassiveSubItem       `json:"items"`
 }
 
 type Sample struct {
