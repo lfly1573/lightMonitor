@@ -3,6 +3,9 @@ package core
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -819,6 +822,24 @@ func (s *Service) sendChannel(ctx context.Context, channel Channel, event AlertE
 		webhook := fmt.Sprint(cfg["webhook"])
 		if webhook == "" || webhook == "<nil>" {
 			return "", "", errors.New("missing dingding webhook")
+		}
+		secret := fmt.Sprint(cfg["secret"])
+		if secret != "" && secret != "<nil>" {
+			timestamp := time.Now().UnixNano() / int64(time.Millisecond)
+			stringToSign := fmt.Sprintf("%d\n%s", timestamp, secret)
+			h := hmac.New(sha256.New, []byte(secret))
+			h.Write([]byte(stringToSign))
+			sign := base64.StdEncoding.EncodeToString(h.Sum(nil))
+
+			u, err := url.Parse(webhook)
+			if err != nil {
+				return "", "", fmt.Errorf("parse dingding webhook URL: %w", err)
+			}
+			q := u.Query()
+			q.Set("timestamp", fmt.Sprintf("%d", timestamp))
+			q.Set("sign", sign)
+			u.RawQuery = q.Encode()
+			webhook = u.String()
 		}
 		body := map[string]interface{}{
 			"msgtype": "text",

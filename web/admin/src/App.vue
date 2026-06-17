@@ -296,6 +296,7 @@ const channelForm = reactive({
   name: '',
   channel_type: 'dingding',
   webhook: '',
+  secret: '',
   bot_token: '',
   chat_id: '',
   enabled: true,
@@ -411,6 +412,7 @@ const text = {
       channel: '通知渠道',
       channels: '通知渠道',
       webhook: '机器人 Webhook',
+      secret: '签名密钥 (Secret)(可选)',
       botToken: 'Bot Token',
       chatID: 'Chat ID',
       value: '值',
@@ -542,6 +544,7 @@ const text = {
       channel: 'Channels',
       channels: 'Channels',
       webhook: 'Robot Webhook',
+      secret: 'Signature Secret (Optional)',
       botToken: 'Bot Token',
       chatID: 'Chat ID',
       value: 'Value',
@@ -856,7 +859,7 @@ function resetForm(type: DrawerType, context: Record<string, unknown>) {
     const fields = fieldsForRuleContext(context.scope_type === 'item' ? 'item' : 'group', Number(context.group_id || selectedGroupID.value), context.item_id as number | undefined)
     Object.assign(ruleForm, { id: 0, name: '', scope_type: context.scope_type || 'group', group_id: context.group_id || selectedGroupID.value || undefined, item_id: context.item_id as number | undefined, source_type: 'any', rule_type: 'field_condition', field_path: String(context.field_path || fields[0]?.field_path || ''), value_type: fields[0]?.value_type || 'float', operator: 'gt', threshold_value: '', aggregate_func: 'avg', aggregate_window_seconds: 300, aggregate_sample_count: undefined, consecutive_count: 1, recovery_count: 1, severity: 'warning', message_template: locale.value === 'zh-CN' ? '{{item}} {{field}} 当前值={{current}} 阈值={{threshold}}' : '{{item}} {{field}} current={{current}} threshold={{threshold}}', enabled: true, channel_ids: [] })
   }
-  if (type === 'channel') Object.assign(channelForm, { id: 0, code: '', name: '', channel_type: 'dingding', webhook: '', bot_token: '', chat_id: '', enabled: true, is_default: false })
+  if (type === 'channel') Object.assign(channelForm, { id: 0, code: '', name: '', channel_type: 'dingding', webhook: '', secret: '', bot_token: '', chat_id: '', enabled: true, is_default: false })
 }
 
 function fillForm(type: DrawerType, row: unknown) {
@@ -871,6 +874,7 @@ function fillForm(type: DrawerType, row: unknown) {
     const config = parseJSON(String(data.config_json || '{}'))
     Object.assign(channelForm, data, {
       webhook: String(config.webhook || ''),
+      secret: String(config.secret || ''),
       bot_token: String(config.bot_token || ''),
       chat_id: String(config.chat_id || ''),
     })
@@ -955,7 +959,7 @@ async function submitRule() {
 async function submitChannel() {
   const config = channelForm.channel_type === 'telegram'
     ? { bot_token: channelForm.bot_token, chat_id: channelForm.chat_id }
-    : { webhook: channelForm.webhook }
+    : { webhook: channelForm.webhook, secret: channelForm.secret }
   await api('/api/channels', {
     method: 'POST',
     body: JSON.stringify({
@@ -1982,7 +1986,10 @@ watch(activeMenu, async () => {
           <el-form-item :label="t.field.code"><el-input v-model="channelForm.code" /></el-form-item>
           <el-form-item :label="t.field.name"><el-input v-model="channelForm.name" /></el-form-item>
           <el-form-item :label="t.labels.channelTemplate"><el-select v-model="channelForm.channel_type"><el-option :label="t.channelTemplates.dingding" value="dingding" /><el-option :label="t.channelTemplates.telegram" value="telegram" /></el-select></el-form-item>
-          <el-form-item v-if="channelForm.channel_type === 'dingding'" :label="t.field.webhook"><el-input v-model="channelForm.webhook" /></el-form-item>
+          <template v-if="channelForm.channel_type === 'dingding'">
+            <el-form-item :label="t.field.webhook"><el-input v-model="channelForm.webhook" /></el-form-item>
+            <el-form-item :label="t.field.secret"><el-input v-model="channelForm.secret" /></el-form-item>
+          </template>
           <template v-else>
             <el-form-item :label="t.field.botToken"><el-input v-model="channelForm.bot_token" /></el-form-item>
             <el-form-item :label="t.field.chatID"><el-input v-model="channelForm.chat_id" /></el-form-item>
