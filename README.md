@@ -5,6 +5,8 @@ lightMonitor 是一个基于 Go、Gin、SQLite 和 Vue3 的轻量级监控系统
 
 本系统完全使用 AI 编程，完全没有古法手艺，可能存在未知问题，如有发现请提出意见。
 
+![运行截图](./attachment/screenshot.png)
+
 ## 运行目录
 
 - `data`: SQLite 数据文件
