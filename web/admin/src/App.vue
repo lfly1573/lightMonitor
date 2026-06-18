@@ -1339,7 +1339,7 @@ function renderOverviewCharts() {
         xAxis: { type: 'category', data: series.map((point) => point.time), boundaryGap: false },
         yAxis: { type: 'value', minInterval: 1 },
         series: [{ type: 'line', smooth: true, symbol: 'circle', symbolSize: 7, data: series.map((point) => point.value), areaStyle: { opacity: 0.08 } }],
-      })
+      }, true)
       chart.resize()
     })
   })
@@ -1356,7 +1356,7 @@ function renderFieldTrendChart() {
     xAxis: { type: 'category', data: series.map((point) => formatDateTime(point.time).slice(5, 16)), boundaryGap: false },
     yAxis: { type: 'value' },
     series: [{ type: 'line', smooth: true, symbol: 'circle', symbolSize: 7, data: series.map((point) => point.value ?? null), areaStyle: { opacity: 0.08 } }],
-  })
+  }, true)
   chart.resize()
 }
 

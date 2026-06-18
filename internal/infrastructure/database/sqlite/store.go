@@ -1758,7 +1758,7 @@ func nullableString(value string) interface{} {
 }
 
 func sqliteTime(value time.Time) string {
-	return value.UTC().Format("2006-01-02 15:04:05")
+	return value.UTC().Format("2006-01-02T15:04:05")
 }
 
 func nullableFloat(value *float64) interface{} {

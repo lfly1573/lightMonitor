@@ -366,5 +366,13 @@ func migrateCompat(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
+	// 6. Create index idx_sample_values_item_field_time to optimize WindowValues query
+	if _, err := db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_sample_values_item_field_time
+		ON monitor_sample_values (item_id, field_path, received_at)
+	`); err != nil {
+		return err
+	}
+
 	return nil
 }

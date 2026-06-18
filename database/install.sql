@@ -240,6 +240,9 @@ CREATE TABLE IF NOT EXISTS monitor_sample_values (
 CREATE INDEX IF NOT EXISTS idx_sample_values_field_time
     ON monitor_sample_values (group_id, item_id, field_path, received_at);
 
+CREATE INDEX IF NOT EXISTS idx_sample_values_item_field_time
+    ON monitor_sample_values (item_id, field_path, received_at);
+
 CREATE INDEX IF NOT EXISTS idx_sample_values_numeric_time
     ON monitor_sample_values (group_id, item_id, field_path, numeric_value, received_at);
 
