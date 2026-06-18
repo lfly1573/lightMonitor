@@ -205,6 +205,9 @@ const state = reactive({
   events: [] as AlertEvent[],
 })
 
+const activeRequestsCount = ref(0)
+const loading = computed(() => activeRequestsCount.value > 0)
+
 const authForm = reactive({ username: '', password: '' })
 const drawer = reactive({ visible: false, type: '' as DrawerType, mode: 'create' as DrawerMode, title: '' })
 const fieldDetail = reactive({
@@ -666,18 +669,23 @@ function local(map: Record<string, string>, key?: string) {
 }
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(path, {
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
-  })
-  const body = await res.json().catch(() => ({ code: res.status, msg: res.statusText }))
-  if (res.status === 401 || body.code === 401) {
-    currentUser.value = null
-    throw new Error('unauthorized')
+  activeRequestsCount.value++
+  try {
+    const res = await fetch(path, {
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      ...options,
+    })
+    const body = await res.json().catch(() => ({ code: res.status, msg: res.statusText }))
+    if (res.status === 401 || body.code === 401) {
+      currentUser.value = null
+      throw new Error('unauthorized')
+    }
+    if (!res.ok || body.code !== 0) throw new Error(body.msg || 'request failed')
+    return body.data
+  } finally {
+    activeRequestsCount.value--
   }
-  if (!res.ok || body.code !== 0) throw new Error(body.msg || 'request failed')
-  return body.data
 }
 
 async function initialize() {
@@ -1452,7 +1460,7 @@ watch([alertPage, alertPageSize], async () => {
 
 <template>
   <el-config-provider :locale="elementLocale">
-  <main v-if="!installed || !currentUser" class="auth-shell">
+  <main v-if="!installed || !currentUser" class="auth-shell" v-loading="loading">
     <el-card class="auth-card" shadow="never">
       <div class="auth-head">
         <h1>lightMonitor</h1>
@@ -1512,7 +1520,7 @@ watch([alertPage, alertPageSize], async () => {
         </div>
       </el-header>
 
-      <el-main class="content">
+      <el-main class="content" v-loading="loading">
         <section v-if="activeMenu === 'overview'" class="page">
           <el-card shadow="never">
             <template #header>
@@ -1891,7 +1899,7 @@ watch([alertPage, alertPageSize], async () => {
       </el-main>
     </el-container>
 
-    <el-drawer v-model="drawer.visible" :title="drawer.title" size="480px">
+    <el-drawer v-model="drawer.visible" :title="drawer.title" size="480px" v-loading="loading">
       <el-form label-position="top" class="drawer-form">
         <template v-if="drawer.type === 'user'">
           <el-form-item :label="t.username"><el-input v-model="userForm.username" /></el-form-item>
@@ -2024,7 +2032,7 @@ watch([alertPage, alertPageSize], async () => {
       </el-form>
     </el-drawer>
 
-    <el-drawer v-model="fieldDetail.visible" :title="t.labels.fieldDetail" size="620px">
+    <el-drawer v-model="fieldDetail.visible" :title="t.labels.fieldDetail" size="620px" v-loading="loading">
       <template v-if="fieldDetail.field && fieldDetail.item">
         <el-descriptions :column="2" border>
           <el-descriptions-item :label="t.field.item">{{ fieldDetail.item.name }}</el-descriptions-item>

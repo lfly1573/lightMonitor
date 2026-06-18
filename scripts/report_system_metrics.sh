@@ -21,6 +21,10 @@
 # }
 # ==============================================================================
 
+# Force standard English locale and dot decimal separator
+export LC_ALL=C
+export LC_NUMERIC=C
+
 # Exit on command errors if needed, but we handle fallbacks manually
 # set -e
 
@@ -168,7 +172,7 @@ fi
 get_cpu_usage() {
     if [ "$(uname)" = "Darwin" ]; then
         # macOS fallback: Read CPU usage from top (needs 2 samples to be accurate)
-        idle=$(top -l 2 -n 0 2>/dev/null | grep "CPU usage" | tail -n 1 | awk '{print $7}' | tr -d '%')
+        idle=$(top -l 2 -n 0 2>/dev/null | grep "CPU usage" | tail -n 1 | grep -oE '[0-9.]+%[[:space:]]*idle' | tr -d '% idle')
         if [ -n "$idle" ]; then
             cpu_val=$(awk "BEGIN {printf \"%.2f\", 100 - $idle}" 2>/dev/null)
             echo "${cpu_val:-0}"
@@ -178,16 +182,29 @@ get_cpu_usage() {
     else
         # Linux implementation via /proc/stat
         if [ -f /proc/stat ]; then
-            user=0; nice=0; system=0; idle=0; iowait=0; irq=0; softirq=0; steal=0; guest=0; guest_nice=0
-            read -r cpu user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat
-            prev_idle=$((idle + iowait))
-            prev_total=$((user + nice + system + idle + iowait + irq + softirq + steal + guest + guest_nice))
+            # Read first sample
+            while read -r cpu u1 n1 s1 id1 io1 irq1 sirq1 st1 g1 gn1 extra; do
+                if [ "$cpu" = "cpu" ]; then
+                    break
+                fi
+            done < /proc/stat
+            
+            u1=${u1:-0}; n1=${n1:-0}; s1=${s1:-0}; id1=${id1:-0}; io1=${io1:-0}; irq1=${irq1:-0}; sirq1=${sirq1:-0}; st1=${st1:-0}
+            prev_idle=$((id1 + io1))
+            prev_total=$((u1 + n1 + s1 + id1 + io1 + irq1 + sirq1 + st1))
             
             sleep 1
             
-            read -r cpu user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat
-            idle=$((idle + iowait))
-            total=$((user + nice + system + idle + iowait + irq + softirq + steal + guest + guest_nice))
+            # Read second sample
+            while read -r cpu u2 n2 s2 id2 io2 irq2 sirq2 st2 g2 gn2 extra; do
+                if [ "$cpu" = "cpu" ]; then
+                    break
+                fi
+            done < /proc/stat
+            
+            u2=${u2:-0}; n2=${n2:-0}; s2=${s2:-0}; id2=${id2:-0}; io2=${io2:-0}; irq2=${irq2:-0}; sirq2=${sirq2:-0}; st2=${st2:-0}
+            idle=$((id2 + io2))
+            total=$((u2 + n2 + s2 + id2 + io2 + irq2 + sirq2 + st2))
             
             diff_idle=$((idle - prev_idle))
             diff_total=$((total - prev_total))
