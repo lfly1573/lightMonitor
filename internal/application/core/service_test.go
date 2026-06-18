@@ -95,3 +95,83 @@ func TestCompareValueStringArray(t *testing.T) {
 		}
 	}
 }
+
+func TestValueAtPath(t *testing.T) {
+	// Active request JSON response (contains top-level "data" key)
+	activeData := map[string]interface{}{
+		"code": float64(200),
+		"data": map[string]interface{}{
+			"doris": map[string]interface{}{
+				"merchant_balance": "75536809 → 75536779",
+				"order":            "86655904 → 86655863",
+				"order_response":   "785524",
+			},
+		},
+	}
+
+	// Passive request data block (does not contain top-level "data" key, it's just the inner payload)
+	passiveData := map[string]interface{}{
+		"doris": map[string]interface{}{
+			"merchant_balance": "75536809 → 75536779",
+			"order":            "86655904 → 86655863",
+			"order_response":   "785524",
+		},
+	}
+
+	tests := []struct {
+		name      string
+		data      map[string]interface{}
+		fieldPath string
+		want      interface{}
+		wantOk    bool
+	}{
+		{
+			name:      "Active - path starts with data.",
+			data:      activeData,
+			fieldPath: "data.doris.order",
+			want:      "86655904 → 86655863",
+			wantOk:    true,
+		},
+		{
+			name:      "Active - path with $. prefix",
+			data:      activeData,
+			fieldPath: "$.data.doris.order_response",
+			want:      "785524",
+			wantOk:    true,
+		},
+		{
+			name:      "Passive - path starts with data. (should be stripped)",
+			data:      passiveData,
+			fieldPath: "data.doris.order",
+			want:      "86655904 → 86655863",
+			wantOk:    true,
+		},
+		{
+			name:      "Passive - path with $. prefix and starts with data. (should be stripped)",
+			data:      passiveData,
+			fieldPath: "$.data.doris.order_response",
+			want:      "785524",
+			wantOk:    true,
+		},
+		{
+			name:      "Passive - path doesn't start with data.",
+			data:      passiveData,
+			fieldPath: "doris.order",
+			want:      "86655904 → 86655863",
+			wantOk:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := valueAtPath(tt.data, tt.fieldPath)
+			if ok != tt.wantOk {
+				t.Fatalf("expected ok=%v, got %v", tt.wantOk, ok)
+			}
+			if ok && got != tt.want {
+				t.Errorf("expected %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
+

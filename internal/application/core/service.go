@@ -1191,7 +1191,7 @@ func toFloat(raw interface{}) (float64, bool) {
 }
 
 func valueAtPath(data map[string]interface{}, path string) (interface{}, bool) {
-	path = normalizeJSONFieldPath(path)
+	path = normalizeJSONFieldPath(data, path)
 	if path == "" {
 		return nil, false
 	}
@@ -1212,11 +1212,15 @@ func valueAtPath(data map[string]interface{}, path string) (interface{}, bool) {
 	return current, true
 }
 
-func normalizeJSONFieldPath(path string) string {
+func normalizeJSONFieldPath(data map[string]interface{}, path string) string {
 	path = strings.TrimSpace(path)
 	path = strings.TrimPrefix(path, "$.")
 	path = strings.TrimPrefix(path, ".")
-	path = strings.TrimPrefix(path, "data.")
+	if strings.HasPrefix(path, "data.") {
+		if _, hasDataKey := data["data"]; !hasDataKey {
+			path = strings.TrimPrefix(path, "data.")
+		}
+	}
 	return path
 }
 

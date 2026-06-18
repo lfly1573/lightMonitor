@@ -20,6 +20,12 @@ go run ./cmd/lightmonitor -P 8573
 
 首次启动时，访问管理后台即可自动跳转到 `/install` 完成管理员初始化配置。
 
+## mac 系统上编译为 linux 可执行文件
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o lightMonitor ./cmd/lightmonitor/main.go
+```
+
 ---
 
 ## 系统使用说明
