@@ -704,15 +704,60 @@ func (s *Store) ListRules(ctx context.Context) ([]core.AlertRule, error) {
 	defer rows.Close()
 
 	var rules []core.AlertRule
+	var ruleIDs []interface{}
+	ruleMap := make(map[int64]*core.AlertRule)
+
 	for rows.Next() {
 		rule, err := scanRule(rows)
 		if err != nil {
 			return nil, err
 		}
-		rule.ChannelIDs, _ = s.ruleChannelIDs(ctx, rule.ID)
+		rule.ChannelIDs = []int64{} // Initialize to empty slice rather than nil
 		rules = append(rules, rule)
+		ruleIDs = append(ruleIDs, rule.ID)
 	}
-	return rules, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(rules) == 0 {
+		return rules, nil
+	}
+
+	for i := range rules {
+		ruleMap[rules[i].ID] = &rules[i]
+	}
+
+	placeholders := make([]string, len(ruleIDs))
+	for i := range ruleIDs {
+		placeholders[i] = "?"
+	}
+	channelsQuery := fmt.Sprintf(`
+		SELECT rule_id, channel_id
+		FROM alert_rule_channels
+		WHERE rule_id IN (%s)
+	`, strings.Join(placeholders, ","))
+
+	cRows, err := s.db.QueryContext(ctx, channelsQuery, ruleIDs...)
+	if err != nil {
+		return nil, err
+	}
+	defer cRows.Close()
+
+	for cRows.Next() {
+		var ruleID, channelID int64
+		if err := cRows.Scan(&ruleID, &channelID); err != nil {
+			return nil, err
+		}
+		if rPtr, ok := ruleMap[ruleID]; ok {
+			rPtr.ChannelIDs = append(rPtr.ChannelIDs, channelID)
+		}
+	}
+	if err := cRows.Err(); err != nil {
+		return nil, err
+	}
+
+	return rules, nil
 }
 
 func (s *Store) UpsertRule(ctx context.Context, input core.AlertRuleInput) (core.AlertRule, error) {
@@ -908,23 +953,52 @@ func (s *Store) LastSample(ctx context.Context, itemID int64) (core.Sample, erro
 	return s.sampleByID(ctx, id)
 }
 
-func (s *Store) ListSamples(ctx context.Context, groupID, itemID int64, limit int) ([]core.Sample, error) {
-	query := `
-		SELECT id
-		FROM monitor_samples
-		WHERE 1 = 1
-	`
+func (s *Store) ListSamples(ctx context.Context, groupID, itemID int64, limit int, latest bool) ([]core.Sample, error) {
+	var query string
 	args := []interface{}{}
-	if groupID > 0 {
-		query += " AND group_id = ?"
-		args = append(args, groupID)
+
+	if latest {
+		query = `
+			SELECT id, group_id, item_id, source_type, name, reported_at, received_at,
+			       interval_seconds, status, http_status_code, latency_ms, raw_json, error_message
+			FROM monitor_samples
+			WHERE id IN (
+				SELECT MAX(id)
+				FROM monitor_samples
+				WHERE 1 = 1
+		`
+		if groupID > 0 {
+			query += " AND group_id = ?"
+			args = append(args, groupID)
+		}
+		if itemID > 0 {
+			query += " AND item_id = ?"
+			args = append(args, itemID)
+		}
+		query += `
+				GROUP BY item_id
+			)
+			ORDER BY received_at DESC, id DESC
+		`
+	} else {
+		query = `
+			SELECT id, group_id, item_id, source_type, name, reported_at, received_at,
+			       interval_seconds, status, http_status_code, latency_ms, raw_json, error_message
+			FROM monitor_samples
+			WHERE 1 = 1
+		`
+		if groupID > 0 {
+			query += " AND group_id = ?"
+			args = append(args, groupID)
+		}
+		if itemID > 0 {
+			query += " AND item_id = ?"
+			args = append(args, itemID)
+		}
+		query += " ORDER BY received_at DESC, id DESC LIMIT ?"
+		args = append(args, limit)
 	}
-	if itemID > 0 {
-		query += " AND item_id = ?"
-		args = append(args, itemID)
-	}
-	query += " ORDER BY received_at DESC, id DESC LIMIT ?"
-	args = append(args, limit)
+
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -932,18 +1006,108 @@ func (s *Store) ListSamples(ctx context.Context, groupID, itemID int64, limit in
 	defer rows.Close()
 
 	var samples []core.Sample
+	var sampleIDs []interface{}
+	sampleMap := make(map[int64]*core.Sample)
+
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		sample, err := s.sampleByID(ctx, id)
+		var sample core.Sample
+		var rawJSON string
+		var reportedAt sql.NullString
+		var interval, statusCode sql.NullInt64
+		var latency sql.NullInt64
+		err := rows.Scan(&sample.ID, &sample.GroupID, &sample.ItemID, &sample.SourceType, &sample.Name, &reportedAt,
+			&sample.ReceivedAt, &interval, &sample.Status, &statusCode, &latency, &rawJSON, &sample.ErrorMessage)
 		if err != nil {
 			return nil, err
 		}
+		if reportedAt.Valid {
+			sample.ReportedAt = reportedAt.String
+		}
+		if interval.Valid {
+			sample.IntervalSeconds = int(interval.Int64)
+		}
+		if statusCode.Valid {
+			sample.HTTPStatusCode = int(statusCode.Int64)
+		}
+		if latency.Valid {
+			sample.LatencyMS = latency.Int64
+		}
+		_ = json.Unmarshal([]byte(rawJSON), &sample.Raw)
+		sample.Values = []core.SampleValue{} // Initialize to empty slice rather than nil
+
 		samples = append(samples, sample)
+		sampleIDs = append(sampleIDs, sample.ID)
 	}
-	return samples, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(samples) == 0 {
+		return samples, nil
+	}
+
+	for i := range samples {
+		sampleMap[samples[i].ID] = &samples[i]
+	}
+
+	placeholders := make([]string, len(sampleIDs))
+	for i := range sampleIDs {
+		placeholders[i] = "?"
+	}
+	valuesQuery := fmt.Sprintf(`
+		SELECT sample_id, field_path, value_type, string_value, integer_value, float_value, boolean_value, numeric_value, raw_value
+		FROM monitor_sample_values
+		WHERE sample_id IN (%s)
+		ORDER BY sample_id, field_path
+	`, strings.Join(placeholders, ","))
+
+	vRows, err := s.db.QueryContext(ctx, valuesQuery, sampleIDs...)
+	if err != nil {
+		return nil, err
+	}
+	defer vRows.Close()
+
+	for vRows.Next() {
+		var sampleID int64
+		var value core.SampleValue
+		var stringValue sql.NullString
+		var intValue sql.NullInt64
+		var floatValue, numericValue sql.NullFloat64
+		var boolValue sql.NullInt64
+		var rawValue sql.NullString
+
+		if err := vRows.Scan(&sampleID, &value.FieldPath, &value.ValueType, &stringValue, &intValue, &floatValue, &boolValue, &numericValue, &rawValue); err != nil {
+			return nil, err
+		}
+		if stringValue.Valid {
+			value.StringValue = stringValue.String
+		}
+		if intValue.Valid {
+			value.IntegerValue = &intValue.Int64
+		}
+		if floatValue.Valid {
+			value.FloatValue = &floatValue.Float64
+		}
+		if boolValue.Valid {
+			v := boolValue.Int64 == 1
+			value.BooleanValue = &v
+		}
+		if numericValue.Valid {
+			value.NumericValue = &numericValue.Float64
+		}
+		if rawValue.Valid {
+			_ = json.Unmarshal([]byte(rawValue.String), &value.RawValue)
+		}
+
+		if sPtr, ok := sampleMap[sampleID]; ok {
+			sPtr.Values = append(sPtr.Values, value)
+		}
+	}
+	if err := vRows.Err(); err != nil {
+		return nil, err
+	}
+
+	return samples, nil
 }
 
 func (s *Store) sampleByID(ctx context.Context, id int64) (core.Sample, error) {
@@ -1266,14 +1430,29 @@ func renderAlertMessage(message string, rule core.AlertRule, sample core.Sample,
 	return message
 }
 
-func (s *Store) ListEvents(ctx context.Context, limit int) ([]core.AlertEvent, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (s *Store) ListEvents(ctx context.Context, limit, offset int, since *time.Time) ([]core.AlertEvent, error) {
+	query := `
 		SELECT id, rule_id, group_id, item_id, sample_id, event_type, severity, title,
 		       message, field_path, current_value, threshold_value, occurred_at
 		FROM alert_events
-		ORDER BY occurred_at DESC, id DESC
-		LIMIT ?
-	`, limit)
+		WHERE 1 = 1
+	`
+	args := []interface{}{}
+	if since != nil {
+		query += " AND occurred_at >= ?"
+		args = append(args, since.Format(time.RFC3339Nano))
+	}
+	query += " ORDER BY occurred_at DESC, id DESC"
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	if offset > 0 {
+		query += " OFFSET ?"
+		args = append(args, offset)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1287,6 +1466,18 @@ func (s *Store) ListEvents(ctx context.Context, limit int) ([]core.AlertEvent, e
 		events = append(events, event)
 	}
 	return events, rows.Err()
+}
+
+func (s *Store) CountEvents(ctx context.Context, since *time.Time) (int64, error) {
+	query := "SELECT COUNT(*) FROM alert_events WHERE 1 = 1"
+	args := []interface{}{}
+	if since != nil {
+		query += " AND occurred_at >= ?"
+		args = append(args, since.Format(time.RFC3339Nano))
+	}
+	var count int64
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&count)
+	return count, err
 }
 
 func (s *Store) eventByID(ctx context.Context, id int64) (core.AlertEvent, error) {
@@ -1347,7 +1538,7 @@ func (s *Store) Dashboard(ctx context.Context) (core.Dashboard, error) {
 			return core.Dashboard{}, err
 		}
 	}
-	events, err := s.ListEvents(ctx, 8)
+	events, err := s.ListEvents(ctx, 8, 0, nil)
 	if err != nil {
 		return core.Dashboard{}, err
 	}

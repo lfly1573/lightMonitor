@@ -593,6 +593,7 @@ const hasObjectArrayFields = computed(() => {
 })
 const alertPage = ref(1)
 const alertPageSize = ref(20)
+const totalAlertEvents = ref(0)
 const groupEventPage = ref(1)
 const groupEventPageSize = ref(20)
 const fieldEventPage = ref(1)
@@ -603,8 +604,7 @@ let fieldTrendChart: echarts.ECharts | null = null
 const overviewChartRefs = new Map<number, HTMLElement>()
 const overviewCharts = new Map<number, echarts.ECharts>()
 const pagedAlertEvents = computed(() => {
-  const start = (alertPage.value - 1) * alertPageSize.value
-  return state.events.slice(start, start + alertPageSize.value)
+  return state.events
 })
 const pagedSelectedGroupEvents = computed(() => {
   const start = (groupEventPage.value - 1) * groupEventPageSize.value
@@ -724,8 +724,8 @@ async function loadPageData(menu: string) {
       api<typeof state.dashboard>('/api/dashboard'),
       api<Group[]>('/api/groups'),
       api<Item[]>('/api/items'),
-      api<Sample[]>('/api/samples?limit=500'),
-      api<AlertEvent[]>('/api/events?limit=500'),
+      api<Sample[]>('/api/samples?latest=true'),
+      api<AlertEvent[]>('/api/events?since_hours=24'),
     ])
     state.dashboard = dashboard || state.dashboard
     state.groups = groups || []
@@ -743,7 +743,14 @@ async function loadPageData(menu: string) {
   } else if (menu === 'channels') {
     state.channels = await api<Channel[]>('/api/channels') || []
   } else if (menu === 'alert-records') {
-    state.events = await api<AlertEvent[]>('/api/events?limit=500') || []
+    if (alertPage.value !== 1) {
+      alertPage.value = 1
+    } else {
+      const offset = (alertPage.value - 1) * alertPageSize.value
+      const res = await api<{ events: AlertEvent[], total: number }>(`/api/events?limit=${alertPageSize.value}&offset=${offset}`)
+      state.events = res.events || []
+      totalAlertEvents.value = res.total || 0
+    }
   } else if (menu.startsWith('group:')) {
     const groupID = Number(menu.slice(6))
     const [items, activeRequests, fields, rules, samples, events] = await Promise.all([
@@ -751,8 +758,8 @@ async function loadPageData(menu: string) {
       api<ActiveRequest[]>('/api/active-requests'),
       api<FieldDefinition[]>('/api/fields'),
       api<AlertRule[]>('/api/rules'),
-      api<Sample[]>(`/api/samples?group_id=${groupID}&limit=500`),
-      api<AlertEvent[]>('/api/events?limit=500'),
+      api<Sample[]>(`/api/samples?group_id=${groupID}&latest=true`),
+      api<AlertEvent[]>('/api/events?since_hours=24'),
     ])
     state.items = items || []
     state.activeRequests = activeRequests || []
@@ -1428,6 +1435,19 @@ watch(activeMenu, async () => {
     }
   }
 })
+
+watch([alertPage, alertPageSize], async () => {
+  if (activeMenu.value === 'alert-records') {
+    try {
+      const offset = (alertPage.value - 1) * alertPageSize.value
+      const res = await api<{ events: AlertEvent[], total: number }>(`/api/events?limit=${alertPageSize.value}&offset=${offset}`)
+      state.events = res.events || []
+      totalAlertEvents.value = res.total || 0
+    } catch (err) {
+      console.error('failed to load paginated events:', err)
+    }
+  }
+})
 </script>
 
 <template>
@@ -1663,13 +1683,13 @@ watch(activeMenu, async () => {
               <el-table-column prop="title" :label="t.field.title" min-width="180" />
               <el-table-column prop="message" :label="t.field.message" min-width="280" />
             </el-table>
-            <el-pagination
+             <el-pagination
               v-model:current-page="alertPage"
               v-model:page-size="alertPageSize"
               class="table-pagination"
               layout="total, sizes, prev, pager, next"
               :page-sizes="[20, 50, 100, 200]"
-              :total="state.events.length"
+              :total="totalAlertEvents"
               @size-change="handleAlertPageSize"
             />
           </el-card>

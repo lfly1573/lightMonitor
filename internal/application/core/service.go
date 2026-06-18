@@ -70,13 +70,14 @@ type Store interface {
 
 	SaveSample(ctx context.Context, input SaveSampleInput, values []SampleValue) (Sample, error)
 	LastSample(ctx context.Context, itemID int64) (Sample, error)
-	ListSamples(ctx context.Context, groupID, itemID int64, limit int) ([]Sample, error)
+	ListSamples(ctx context.Context, groupID, itemID int64, limit int, latest bool) ([]Sample, error)
 	Stats(ctx context.Context, groupID, itemID int64, fieldPath string, since time.Time) (StatResult, error)
 
 	AlertRulesForSample(ctx context.Context, sample Sample) ([]AlertRule, error)
 	WindowValues(ctx context.Context, itemID int64, fieldPath string, since time.Time, limit int) ([]float64, error)
 	ApplyAlertEvaluation(ctx context.Context, rule AlertRule, sample Sample, matched bool, currentValue, threshold string) (*AlertEvent, error)
-	ListEvents(ctx context.Context, limit int) ([]AlertEvent, error)
+	ListEvents(ctx context.Context, limit, offset int, since *time.Time) ([]AlertEvent, error)
+	CountEvents(ctx context.Context, since *time.Time) (int64, error)
 	ListEnabledChannelsForRule(ctx context.Context, ruleID int64) ([]Channel, error)
 	CreateNotification(ctx context.Context, eventID, channelID int64, status, requestJSON, responseText, errorMessage string) error
 	Dashboard(ctx context.Context) (Dashboard, error)
@@ -403,11 +404,11 @@ func (s *Service) ReceivePassive(ctx context.Context, payload PassivePayload) (i
 	return lastItemInterval, setting, nil
 }
 
-func (s *Service) Samples(ctx context.Context, groupID, itemID int64, limit int) ([]Sample, error) {
+func (s *Service) Samples(ctx context.Context, groupID, itemID int64, limit int, latest bool) ([]Sample, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	return s.store.ListSamples(ctx, groupID, itemID, limit)
+	return s.store.ListSamples(ctx, groupID, itemID, limit, latest)
 }
 
 func (s *Service) Stats(ctx context.Context, groupID, itemID int64, fieldPath string, since time.Time) (StatResult, error) {
@@ -417,11 +418,19 @@ func (s *Service) Stats(ctx context.Context, groupID, itemID int64, fieldPath st
 	return s.store.Stats(ctx, groupID, itemID, fieldPath, since)
 }
 
-func (s *Service) Events(ctx context.Context, limit int) ([]AlertEvent, error) {
-	if limit <= 0 || limit > 500 {
+func (s *Service) Events(ctx context.Context, limit, offset int, since *time.Time) ([]AlertEvent, int64, error) {
+	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	return s.store.ListEvents(ctx, limit)
+	events, err := s.store.ListEvents(ctx, limit, offset, since)
+	if err != nil {
+		return nil, 0, err
+	}
+	total, err := s.store.CountEvents(ctx, since)
+	if err != nil {
+		return nil, 0, err
+	}
+	return events, total, nil
 }
 
 func (s *Service) Dashboard(ctx context.Context) (Dashboard, error) {

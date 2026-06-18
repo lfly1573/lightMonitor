@@ -5,6 +5,20 @@
 #              system metrics (CPU, Memory, Disk Usage %) and report them to the
 #              lightMonitor passive receive API.
 # Compatibility: Linux (CentOS/RHEL, Ubuntu/Debian, Alpine/BusyBox, etc.), macOS
+#
+# Submitted JSON Payload Example:
+# {
+#   "group": "prod_servers",
+#   "name": "web-host-01",
+#   "token": "your_upload_token_here",
+#   "timestamp": 1718706354,
+#   "interval": 60,
+#   "data": {
+#     "cpu_usage": 12.50,
+#     "mem_usage": 45.32,
+#     "disk_usage": 35.10
+#   }
+# }
 # ==============================================================================
 
 # Exit on command errors if needed, but we handle fallbacks manually

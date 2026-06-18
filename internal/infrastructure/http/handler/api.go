@@ -359,7 +359,8 @@ func (h *APIHandler) DeleteRule(c *gin.Context) {
 }
 
 func (h *APIHandler) Samples(c *gin.Context) {
-	samples, err := h.service.Samples(c.Request.Context(), queryInt64(c, "group_id"), queryInt64(c, "item_id"), queryInt(c, "limit"))
+	latest := c.Query("latest") == "true" || c.Query("latest") == "1"
+	samples, err := h.service.Samples(c.Request.Context(), queryInt64(c, "group_id"), queryInt64(c, "item_id"), queryInt(c, "limit"), latest)
 	if err != nil {
 		writeError(c, err)
 		return
@@ -381,12 +382,42 @@ func (h *APIHandler) Stats(c *gin.Context) {
 }
 
 func (h *APIHandler) Events(c *gin.Context) {
-	events, err := h.service.Events(c.Request.Context(), queryInt(c, "limit"))
+	var since *time.Time
+	if sinceHours := queryInt(c, "since_hours"); sinceHours > 0 {
+		t := time.Now().Add(-time.Duration(sinceHours) * time.Hour)
+		since = &t
+	}
+	offsetStr := c.Query("offset")
+	pageStr := c.Query("page")
+	isPaginated := offsetStr != "" || pageStr != ""
+
+	offset := 0
+	if offsetStr != "" {
+		offset = queryInt(c, "offset")
+	} else if pageStr != "" {
+		page := queryInt(c, "page")
+		limit := queryInt(c, "limit")
+		if limit <= 0 {
+			limit = 20
+		}
+		if page > 1 {
+			offset = (page - 1) * limit
+		}
+	}
+
+	events, total, err := h.service.Events(c.Request.Context(), queryInt(c, "limit"), offset, since)
 	if err != nil {
 		writeError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, OK(events))
+	if isPaginated {
+		c.JSON(http.StatusOK, OK(gin.H{
+			"events": events,
+			"total":  total,
+		}))
+	} else {
+		c.JSON(http.StatusOK, OK(events))
+	}
 }
 
 func bindJSON(c *gin.Context, dest interface{}) bool {

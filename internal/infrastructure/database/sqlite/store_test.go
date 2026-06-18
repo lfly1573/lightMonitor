@@ -64,7 +64,7 @@ func TestPassiveReceiveCoercesFieldsAndTriggersAlert(t *testing.T) {
 		t.Fatalf("items len = %d, want 1", len(items))
 	}
 
-	samples, err := service.Samples(ctx, group.ID, items[0].ID, 10)
+	samples, err := service.Samples(ctx, group.ID, items[0].ID, 10, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestPassiveReceiveCoercesFieldsAndTriggersAlert(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, err := service.Events(ctx, 10)
+	events, _, err := service.Events(ctx, 10, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,14 +171,14 @@ func TestCheckMissingAlertsNeverReportedPassiveItem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	samples, err := service.Samples(ctx, group.ID, item.ID, 10)
+	samples, err := service.Samples(ctx, group.ID, item.ID, 10, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(samples) != 1 || samples[0].Status != "missing" {
 		t.Fatalf("samples = %#v, want one missing sample", samples)
 	}
-	events, err := service.Events(ctx, 10)
+	events, _, err := service.Events(ctx, 10, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestPassiveReceiveSilencedWhenItemAlertDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, err := service.Events(ctx, 10)
+	events, _, err := service.Events(ctx, 10, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +668,7 @@ func TestPassiveReceiveObjectArray(t *testing.T) {
 	}
 
 	// 8. Verify the sample value temperature under dev-beta was saved and evaluated
-	samples, err := service.Samples(ctx, childGroup.ID, betaID, 1)
+	samples, err := service.Samples(ctx, childGroup.ID, betaID, 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +686,7 @@ func TestPassiveReceiveObjectArray(t *testing.T) {
 	}
 
 	// 9. Verify high temperature warning alert was triggered
-	events, err := service.Events(ctx, 10)
+	events, _, err := service.Events(ctx, 10, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
