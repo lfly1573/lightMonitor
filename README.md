@@ -26,6 +26,16 @@ go run ./cmd/lightmonitor -P 8573
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o lightMonitor ./cmd/lightmonitor/main.go
 ```
 
+## 简易 linux 部署
+
+在服务器上创建 /www/lightMonitor 目录，上传执行文件 lightMonitor 并设置权限 755。
+建议使用 `./scripts/check_process.sh` 进行进程守护，或者直接执行如下语句：
+```bash
+ cd /www/lightMonitor
+nohup /www/lightMonitor/lightMonitor >/dev/null 2>&1 &
+```
+程序默认端口为 `8573`。使用http请求直接访问即可。
+
 ---
 
 ## 系统使用说明
