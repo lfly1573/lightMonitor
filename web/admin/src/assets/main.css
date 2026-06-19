@@ -430,6 +430,10 @@ body {
   gap: 2px;
 }
 
+.drawer-body-content {
+  min-height: 100%;
+}
+
 .form-help {
   margin-top: 6px;
   color: #7c8fa3;

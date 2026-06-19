@@ -1899,8 +1899,9 @@ watch([alertPage, alertPageSize], async () => {
       </el-main>
     </el-container>
 
-    <el-drawer v-model="drawer.visible" :title="drawer.title" size="480px" v-loading="loading">
-      <el-form label-position="top" class="drawer-form">
+    <el-drawer v-model="drawer.visible" :title="drawer.title" size="480px">
+      <div v-loading="loading" class="drawer-body-content">
+        <el-form label-position="top" class="drawer-form">
         <template v-if="drawer.type === 'user'">
           <el-form-item :label="t.username"><el-input v-model="userForm.username" /></el-form-item>
           <el-form-item :label="t.password"><el-input v-model="userForm.password" type="password" show-password /></el-form-item>
@@ -2029,11 +2030,13 @@ watch([alertPage, alertPageSize], async () => {
           <el-button @click="drawer.visible = false">{{ t.cancel }}</el-button>
           <el-button type="primary" @click="submitDrawer">{{ t.save }}</el-button>
         </div>
-      </el-form>
+        </el-form>
+      </div>
     </el-drawer>
 
-    <el-drawer v-model="fieldDetail.visible" :title="t.labels.fieldDetail" size="620px" v-loading="loading">
-      <template v-if="fieldDetail.field && fieldDetail.item">
+    <el-drawer v-model="fieldDetail.visible" :title="t.labels.fieldDetail" size="620px">
+      <div v-loading="loading" class="drawer-body-content">
+        <template v-if="fieldDetail.field && fieldDetail.item">
         <el-descriptions :column="2" border>
           <el-descriptions-item :label="t.field.item">{{ fieldDetail.item.name }}</el-descriptions-item>
           <el-descriptions-item :label="t.field.fieldPath">{{ fieldDetail.field.field_path }}</el-descriptions-item>
@@ -2087,7 +2090,8 @@ watch([alertPage, alertPageSize], async () => {
           :total="fieldEvents(fieldDetail.item, fieldDetail.field).length"
           @size-change="handleFieldEventPageSize"
         />
-      </template>
+        </template>
+      </div>
     </el-drawer>
   </el-container>
   </el-config-provider>
