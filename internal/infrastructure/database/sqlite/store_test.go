@@ -774,3 +774,480 @@ func TestGroupSortOrder(t *testing.T) {
 		t.Errorf("expected group_c at index 2, got %s (sort_order=%d)", groups[2].Code, groups[2].SortOrder)
 	}
 }
+
+func TestCombineAlertGroupLogic(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "combine_test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.ExecContext(ctx, migrations.InstallSQL); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(db)
+	service := core.NewService(store)
+
+	group, err := service.CreateGroup(ctx, core.GroupInput{
+		Code:                   "combine_group_test",
+		Name:                   "Combine Group Test",
+		DefaultIntervalSeconds: 10,
+		MissedTimesThreshold:   3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.UpsertField(ctx, core.FieldInput{
+		ScopeType: "group",
+		GroupID:   group.ID,
+		FieldPath: "val1",
+		ValueType: "float",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.UpsertField(ctx, core.FieldInput{
+		ScopeType: "group",
+		GroupID:   group.ID,
+		FieldPath: "val2",
+		ValueType: "float",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create passive item
+	if _, _, err := service.ReceivePassive(ctx, core.PassivePayload{
+		Group:    "combine_group_test",
+		Name:     "node-1",
+		Interval: 10,
+		Data: map[string]interface{}{
+			"val1": 5.0,
+			"val2": 5.0,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := service.Items(ctx, group.ID)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("expected 1 item, got error: %v, items: %+v", err, items)
+	}
+	itemID := items[0].ID
+
+	// Create Rule 1 with CombineGroup
+	_, err = service.UpsertRule(ctx, core.AlertRuleInput{
+		Name:             "val1 high",
+		ScopeType:        "item",
+		GroupID:          &group.ID,
+		ItemID:           &itemID,
+		SourceType:       "passive",
+		RuleType:         "field_condition",
+		FieldPath:        "val1",
+		Operator:         "gt",
+		ThresholdValue:   "10",
+		ConsecutiveCount: 1,
+		RecoveryCount:    1,
+		Severity:         "warning",
+		CombineGroup:     "my_combine_group",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create Rule 2 with CombineGroup
+	_, err = service.UpsertRule(ctx, core.AlertRuleInput{
+		Name:             "val2 high",
+		ScopeType:        "item",
+		GroupID:          &group.ID,
+		ItemID:           &itemID,
+		SourceType:       "passive",
+		RuleType:         "field_condition",
+		FieldPath:        "val2",
+		Operator:         "gt",
+		ThresholdValue:   "20",
+		ConsecutiveCount: 1,
+		RecoveryCount:    1,
+		Severity:         "warning",
+		CombineGroup:     "my_combine_group",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Evaluate first sample: val1 = 15, val2 = 5 (Rule 1 matched, Rule 2 unmatched) -> Transient state, should NOT alert.
+	if _, _, err := service.ReceivePassive(ctx, core.PassivePayload{
+		Group:    "combine_group_test",
+		Name:     "node-1",
+		Interval: 10,
+		Data: map[string]interface{}{
+			"val1": 15.0,
+			"val2": 5.0,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, err := service.Events(ctx, 10, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events during transient hit state, got: %+v", events)
+	}
+
+	// 2. Evaluate second sample: val1 = 15, val2 = 25 (Rule 1 matched, Rule 2 matched) -> All matched state, should trigger alerts for both.
+	if _, _, err := service.ReceivePassive(ctx, core.PassivePayload{
+		Group:    "combine_group_test",
+		Name:     "node-1",
+		Interval: 10,
+		Data: map[string]interface{}{
+			"val1": 15.0,
+			"val2": 25.0,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, err = service.Events(ctx, 10, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events after all matched state, got: %+v", events)
+	}
+	for _, ev := range events {
+		if ev.EventType != "triggered" {
+			t.Fatalf("expected event type to be triggered, got: %s", ev.EventType)
+		}
+	}
+
+	// Clear events from DB for easy counts in subsequent steps
+	if _, err := db.ExecContext(ctx, `DELETE FROM alert_events`); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Evaluate third sample: val1 = 5, val2 = 25 (Rule 1 unmatched, Rule 2 matched) -> Transient state, should NOT recover.
+	if _, _, err := service.ReceivePassive(ctx, core.PassivePayload{
+		Group:    "combine_group_test",
+		Name:     "node-1",
+		Interval: 10,
+		Data: map[string]interface{}{
+			"val1": 5.0,
+			"val2": 25.0,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, err = service.Events(ctx, 10, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events during transient recovery state, got: %+v", events)
+	}
+
+	// 4. Evaluate fourth sample: val1 = 5, val2 = 5 (Rule 1 unmatched, Rule 2 unmatched) -> All recovered state, should trigger recovery for both.
+	if _, _, err := service.ReceivePassive(ctx, core.PassivePayload{
+		Group:    "combine_group_test",
+		Name:     "node-1",
+		Interval: 10,
+		Data: map[string]interface{}{
+			"val1": 5.0,
+			"val2": 5.0,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, err = service.Events(ctx, 10, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events after all recovered state, got: %+v", events)
+	}
+	for _, ev := range events {
+		if ev.EventType != "recovered" {
+			t.Fatalf("expected event type to be recovered, got: %s", ev.EventType)
+		}
+	}
+}
+
+func TestRuleEvaluationStatusSkipping(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "status_skip_test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.ExecContext(ctx, migrations.InstallSQL); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(db)
+	service := core.NewService(store)
+
+	group, err := service.CreateGroup(ctx, core.GroupInput{
+		Code:                   "status_skip_test",
+		Name:                   "Status Skip Test",
+		DefaultIntervalSeconds: 10,
+		MissedTimesThreshold:   3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	item, err := service.CreateItem(ctx, core.ItemInput{
+		GroupID:         group.ID,
+		Name:            "node-1",
+		SourceType:      "passive",
+		IntervalSeconds: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.UpsertField(ctx, core.FieldInput{
+		ScopeType: "group",
+		GroupID:   group.ID,
+		FieldPath: "val1",
+		ValueType: "float",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	bTrue := true
+	// Create a field condition rule
+	rule, err := store.UpsertRule(ctx, core.AlertRuleInput{
+		Name:             "Val1 High",
+		ScopeType:        "item",
+		GroupID:          &group.ID,
+		ItemID:           &item.ID,
+		SourceType:       "passive",
+		RuleType:         "field_condition",
+		FieldPath:        "val1",
+		ValueType:        "float",
+		Operator:         "gt",
+		ThresholdValue:   "10.0",
+		ConsecutiveCount: 1,
+		RecoveryCount:    1,
+		Severity:         "warning",
+		MessageTemplate:  "val1 is {{current}}",
+		Enabled:          &bTrue,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Trigger the alarm
+	_, _, err = service.ReceivePassive(ctx, core.PassivePayload{
+		Group:    "status_skip_test",
+		Name:     "node-1",
+		Interval: 10,
+		Data: map[string]interface{}{
+			"val1": 15.0,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, err := service.Events(ctx, 10, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].RuleID != rule.ID || events[0].EventType != "triggered" {
+		t.Fatalf("expected 1 triggered event, got: %+v", events)
+	}
+
+	// Clear events from DB for counting
+	if _, err := db.ExecContext(ctx, `DELETE FROM alert_events`); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Evaluate a missing sample (this sets Status to "missing")
+	// Save a missing sample and evaluate it
+	sample, err := store.SaveSample(ctx, core.SaveSampleInput{
+		GroupID:         group.ID,
+		ItemID:          item.ID,
+		SourceType:      item.SourceType,
+		Name:            item.Name,
+		IntervalSeconds: 10,
+		Status:          "missing",
+		Raw:             map[string]interface{}{"message": "data missing"},
+		ErrorMessage:    "data missing",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := service.EvaluateSample(ctx, sample); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify that NO recovery event has been generated, and rule state remains alerting
+	events, _, err = service.Events(ctx, 10, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected no events, got: %+v", events)
+	}
+
+	var statusStr string
+	err = db.QueryRowContext(ctx, "SELECT status FROM alert_states WHERE rule_id = ? AND item_id = ?", rule.ID, item.ID).Scan(&statusStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statusStr != "alerting" {
+		t.Fatalf("expected rule to remain alerting, got: %s", statusStr)
+	}
+
+	// 3. Send a normal value below threshold (val1 = 5.0) -> should recover
+	_, _, err = service.ReceivePassive(ctx, core.PassivePayload{
+		Group:    "status_skip_test",
+		Name:     "node-1",
+		Interval: 10,
+		Data: map[string]interface{}{
+			"val1": 5.0,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, err = service.Events(ctx, 10, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].RuleID != rule.ID || events[0].EventType != "recovered" {
+		t.Fatalf("expected 1 recovered event, got: %+v", events)
+	}
+}
+
+func TestRuleEvaluationJSONThreshold(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "json_threshold_test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.ExecContext(ctx, migrations.InstallSQL); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(db)
+	service := core.NewService(store)
+
+	group, err := service.CreateGroup(ctx, core.GroupInput{
+		Code:                   "json_threshold_test",
+		Name:                   "JSON Threshold Test",
+		DefaultIntervalSeconds: 10,
+		MissedTimesThreshold:   3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	item, err := service.CreateItem(ctx, core.ItemInput{
+		GroupID:         group.ID,
+		Name:            "node-1",
+		SourceType:      "passive",
+		IntervalSeconds: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.UpsertField(ctx, core.FieldInput{
+		ScopeType: "group",
+		GroupID:   group.ID,
+		FieldPath: "val1",
+		ValueType: "float",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	bTrue := true
+	rule, err := store.UpsertRule(ctx, core.AlertRuleInput{
+		Name:             "Dynamic Val1 High",
+		ScopeType:        "item",
+		GroupID:          &group.ID,
+		ItemID:           &item.ID,
+		SourceType:       "passive",
+		RuleType:         "field_condition",
+		FieldPath:        "val1",
+		ValueType:        "float",
+		Operator:         "gt",
+		ThresholdValue:   "json:data.threshold_limit",
+		ConsecutiveCount: 1,
+		RecoveryCount:    1,
+		Severity:         "warning",
+		MessageTemplate:  "val1 is {{current}}",
+		Enabled:          &bTrue,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Send data where val1 (15.0) > threshold_limit (10.0) -> should trigger alarm
+	_, _, err = service.ReceivePassive(ctx, core.PassivePayload{
+		Group:    "json_threshold_test",
+		Name:     "node-1",
+		Interval: 10,
+		Data: map[string]interface{}{
+			"val1": 15.0,
+			"threshold_limit": 10.0,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, err := service.Events(ctx, 10, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].RuleID != rule.ID || events[0].EventType != "triggered" {
+		t.Fatalf("expected 1 triggered event, got: %+v", events)
+	}
+	if events[0].ThresholdValue != "json:data.threshold_limit(10)" {
+		t.Fatalf("expected ThresholdValue to be formatted as json:data.threshold_limit(10), got: %s", events[0].ThresholdValue)
+	}
+
+	// Clear events from DB for counting
+	if _, err := db.ExecContext(ctx, `DELETE FROM alert_events`); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Send data where val1 (8.0) <= threshold_limit (10.0) -> should recover alarm
+	_, _, err = service.ReceivePassive(ctx, core.PassivePayload{
+		Group:    "json_threshold_test",
+		Name:     "node-1",
+		Interval: 10,
+		Data: map[string]interface{}{
+			"val1": 8.0,
+			"threshold_limit": 10.0,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, err = service.Events(ctx, 10, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].RuleID != rule.ID || events[0].EventType != "recovered" {
+		t.Fatalf("expected 1 recovered event, got: %+v", events)
+	}
+	if events[0].ThresholdValue != "json:data.threshold_limit(10)" {
+		t.Fatalf("expected ThresholdValue to be formatted as json:data.threshold_limit(10), got: %s", events[0].ThresholdValue)
+	}
+}

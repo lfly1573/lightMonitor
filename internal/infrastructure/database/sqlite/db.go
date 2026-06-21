@@ -366,7 +366,34 @@ func migrateCompat(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
-	// 6. Create index idx_sample_values_item_field_time to optimize WindowValues query
+	// 6. Check alert_rules for combine_group column
+	rowsRules, err := db.QueryContext(ctx, `PRAGMA table_info(alert_rules)`)
+	if err != nil {
+		return err
+	}
+	hasCombineGroup := false
+	for rowsRules.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue, pk interface{}
+		if err := rowsRules.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			rowsRules.Close()
+			return err
+		}
+		if name == "combine_group" {
+			hasCombineGroup = true
+		}
+	}
+	rowsRules.Close()
+
+	if !hasCombineGroup {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE alert_rules ADD COLUMN combine_group TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+
+	// 7. Create index idx_sample_values_item_field_time to optimize WindowValues query
 	if _, err := db.ExecContext(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_sample_values_item_field_time
 		ON monitor_sample_values (item_id, field_path, received_at)

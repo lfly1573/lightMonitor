@@ -118,6 +118,7 @@ interface AlertRule {
   recovery_count: number
   severity: string
   message_template: string
+  combine_group: string
   enabled: boolean
   channel_ids?: number[]
 }
@@ -290,6 +291,7 @@ const ruleForm = reactive({
   recovery_count: 1,
   severity: 'warning',
   message_template: '',
+  combine_group: '',
   enabled: true,
   channel_ids: [] as number[],
 })
@@ -339,6 +341,7 @@ const text = {
     noGroup: '请先创建或选择一个分组。',
     groupMenu: '分组',
     messageVars: '可用变量：{{item}}、{{field}}、{{current}}、{{threshold}}、{{severity}}。',
+    thresholdHelp: '支持设置 JSON 字段作为动态阈值，格式如 "json:data.field1"',
     noEvents: '暂无报警记录。',
     refreshed: '已刷新',
     nav: { overview: '总览', groups: '分组', users: '用户', settings: '系统', channels: '通知渠道', alertRecords: '报警记录' },
@@ -414,6 +417,7 @@ const text = {
       messageTemplate: '通知模板',
       channel: '通知渠道',
       channels: '通知渠道',
+      combineGroup: '合并报警组别',
       webhook: '机器人 Webhook',
       secret: '签名密钥 (Secret)(可选)',
       botToken: 'Bot Token',
@@ -441,7 +445,7 @@ const text = {
     valueTypes: { string: '字符串', integer: '整数', float: '浮点', boolean: '布尔', object_array: '对象数组', string_array: '字符串数组' },
     ruleTypes: { missing_data: '缺失数据', request_failed: '请求失败', field_condition: '字段条件', aggregate_condition: '聚合条件' },
     operators: { gt: '>', gte: '>=', lt: '<', lte: '<=', eq: '=', ne: '!=', contains: '包含', not_contains: '不包含', exists: '字段存在', not_exists: '字段不存在', len_eq: '长度=', len_gt: '长度>', len_lt: '长度<', len_ne: '长度!=' },
-    severities: { info: '信息', warning: '警告', critical: '严重' },
+    severities: { info: '信息', warning: '警告', critical: '严重', recovered: '恢复' },
     channelTemplates: { dingding: '钉钉机器人报警', telegram: 'Telegram 报警' },
   },
   'en-US': {
@@ -471,6 +475,7 @@ const text = {
     noGroup: 'Create or select a group first.',
     groupMenu: 'Groups',
     messageVars: 'Available variables: {{item}}, {{field}}, {{current}}, {{threshold}}, {{severity}}.',
+    thresholdHelp: 'Supports setting a JSON field as dynamic threshold, format like "json:data.field1"',
     noEvents: 'No alert events yet.',
     refreshed: 'Refreshed',
     nav: { overview: 'Overview', groups: 'Groups', users: 'Users', settings: 'System', channels: 'Notification Channels', alertRecords: 'Alert Records' },
@@ -546,6 +551,7 @@ const text = {
       messageTemplate: 'Message Template',
       channel: 'Channels',
       channels: 'Channels',
+      combineGroup: 'Combine Alert Group',
       webhook: 'Robot Webhook',
       secret: 'Signature Secret (Optional)',
       botToken: 'Bot Token',
@@ -573,7 +579,7 @@ const text = {
     valueTypes: { string: 'String', integer: 'Integer', float: 'Float', boolean: 'Boolean', object_array: 'Object Array', string_array: 'String Array' },
     ruleTypes: { missing_data: 'Missing Data', request_failed: 'Request Failed', field_condition: 'Field Condition', aggregate_condition: 'Aggregate Condition' },
     operators: { gt: '>', gte: '>=', lt: '<', lte: '<=', eq: '=', ne: '!=', contains: 'Contains', not_contains: 'Does Not Contain', exists: 'Field Exists', not_exists: 'Field Missing', len_eq: 'Length =', len_gt: 'Length >', len_lt: 'Length <', len_ne: 'Length !=' },
-    severities: { info: 'Info', warning: 'Warning', critical: 'Critical' },
+    severities: { info: 'Info', warning: 'Warning', critical: 'Critical', recovered: 'Recovered' },
     channelTemplates: { dingding: 'DingTalk Robot Alert', telegram: 'Telegram Alert' },
   },
 }
@@ -593,6 +599,22 @@ const selectedGroupRules = computed(() => state.rules.filter((rule) => rule.scop
 const selectedGroupEvents = computed(() => state.events.filter((event) => event.group_id === selectedGroupID.value))
 const hasObjectArrayFields = computed(() => {
   return state.fields.some(field => field.value_type === 'object_array' && field.ref_group_id === selectedGroupID.value)
+})
+const existingCombineGroups = computed(() => {
+  const groups = new Set<string>()
+  state.rules.forEach((rule) => {
+    if (!rule.combine_group) return
+    if (ruleForm.scope_type === 'group') {
+      if (rule.scope_type === 'group' && rule.group_id === ruleForm.group_id) {
+        groups.add(rule.combine_group)
+      }
+    } else if (ruleForm.scope_type === 'item' || ruleForm.scope_type === 'field') {
+      if ((rule.scope_type === 'item' || rule.scope_type === 'field') && rule.item_id === ruleForm.item_id) {
+        groups.add(rule.combine_group)
+      }
+    }
+  })
+  return Array.from(groups)
 })
 const alertPage = ref(1)
 const alertPageSize = ref(20)
@@ -872,7 +894,7 @@ function resetForm(type: DrawerType, context: Record<string, unknown>) {
   if (type === 'field') Object.assign(fieldForm, { id: 0, scope_type: context.scope_type || 'group', group_id: Number(context.group_id || selectedGroupID.value), item_id: context.item_id as number | undefined, field_path: '', display_name: '', value_type: 'float', unit: '', required: false, enabled: true, ref_group_id: undefined, ref_name_path: '' })
   if (type === 'rule') {
     const fields = fieldsForRuleContext(context.scope_type === 'item' ? 'item' : 'group', Number(context.group_id || selectedGroupID.value), context.item_id as number | undefined)
-    Object.assign(ruleForm, { id: 0, name: '', scope_type: context.scope_type || 'group', group_id: context.group_id || selectedGroupID.value || undefined, item_id: context.item_id as number | undefined, source_type: 'any', rule_type: 'field_condition', field_path: String(context.field_path || fields[0]?.field_path || ''), value_type: fields[0]?.value_type || 'float', operator: 'gt', threshold_value: '', aggregate_func: 'avg', aggregate_window_seconds: 300, aggregate_sample_count: undefined, consecutive_count: 1, recovery_count: 1, severity: 'warning', message_template: locale.value === 'zh-CN' ? '{{item}} {{field}} 当前值={{current}} 阈值={{threshold}}' : '{{item}} {{field}} current={{current}} threshold={{threshold}}', enabled: true, channel_ids: [] })
+    Object.assign(ruleForm, { id: 0, name: '', scope_type: context.scope_type || 'group', group_id: context.group_id || selectedGroupID.value || undefined, item_id: context.item_id as number | undefined, source_type: 'any', rule_type: 'field_condition', field_path: String(context.field_path || fields[0]?.field_path || ''), value_type: fields[0]?.value_type || 'float', operator: 'gt', threshold_value: '', aggregate_func: 'avg', aggregate_window_seconds: 300, aggregate_sample_count: undefined, consecutive_count: 1, recovery_count: 1, severity: 'warning', message_template: locale.value === 'zh-CN' ? '{{item}} {{field}} 当前值={{current}} 阈值={{threshold}}' : '{{item}} {{field}} current={{current}} threshold={{threshold}}', combine_group: '', enabled: true, channel_ids: [] })
   }
   if (type === 'channel') Object.assign(channelForm, { id: 0, code: '', name: '', channel_type: 'dingding', webhook: '', secret: '', bot_token: '', chat_id: '', enabled: true, is_default: false })
 }
@@ -1760,15 +1782,16 @@ watch([alertPage, alertPageSize], async () => {
                         </div>
                         <el-table :data="itemRules(row.id)" size="small" empty-text="-">
                           <el-table-column prop="name" :label="t.field.name" />
-                          <el-table-column prop="field_path" :label="t.field.fieldPath" />
+                          <el-table-column prop="field_path" :label="t.field.fieldPath" min-width="120" show-overflow-tooltip class-name="nowrap-column" label-class-name="nowrap-column" />
                           <el-table-column :label="t.field.ruleType"><template #default="{ row: rule }">{{ local(t.ruleTypes, rule.rule_type) }}</template></el-table-column>
                           <el-table-column :label="t.field.operator"><template #default="{ row: rule }">{{ ruleOperator(rule) }}</template></el-table-column>
                           <el-table-column prop="threshold_value" :label="t.field.threshold" />
                           <el-table-column prop="consecutive_count" :label="t.field.consecutive" />
                           <el-table-column prop="recovery_count" :label="t.field.recovery" />
                           <el-table-column :label="t.field.severity"><template #default="{ row: rule }">{{ local(t.severities, rule.severity) }}</template></el-table-column>
+                          <el-table-column prop="combine_group" :label="t.field.combineGroup" min-width="150" show-overflow-tooltip class-name="nowrap-column" label-class-name="nowrap-column" />
                           <el-table-column :label="t.field.channels"><template #default="{ row: rule }">{{ ruleChannels(rule) }}</template></el-table-column>
-                          <el-table-column v-if="isAdmin" :label="t.field.action" width="150">
+                          <el-table-column v-if="isAdmin" :label="t.field.action" width="110">
                             <template #default="{ row: rule }">
                               <el-button link type="primary" @click="openDrawer('rule', 'edit', rule)">{{ t.edit }}</el-button>
                               <el-button link type="danger" @click="deleteEntity('rule', rule.id)">{{ t.delete }}</el-button>
@@ -1855,15 +1878,16 @@ watch([alertPage, alertPageSize], async () => {
                 </div>
                 <el-table :data="selectedGroupRules">
                   <el-table-column prop="name" :label="t.field.name" />
-                  <el-table-column prop="field_path" :label="t.field.fieldPath" />
+                  <el-table-column prop="field_path" :label="t.field.fieldPath" min-width="120" show-overflow-tooltip class-name="nowrap-column" label-class-name="nowrap-column" />
                   <el-table-column :label="t.field.ruleType"><template #default="{ row }">{{ local(t.ruleTypes, row.rule_type) }}</template></el-table-column>
                   <el-table-column :label="t.field.operator"><template #default="{ row }">{{ ruleOperator(row) }}</template></el-table-column>
                   <el-table-column prop="threshold_value" :label="t.field.threshold" />
                   <el-table-column prop="consecutive_count" :label="t.field.consecutive" />
                   <el-table-column prop="recovery_count" :label="t.field.recovery" />
                   <el-table-column :label="t.field.severity"><template #default="{ row }">{{ local(t.severities, row.severity) }}</template></el-table-column>
+                  <el-table-column prop="combine_group" :label="t.field.combineGroup" min-width="150" show-overflow-tooltip class-name="nowrap-column" label-class-name="nowrap-column" />
                   <el-table-column :label="t.field.channels"><template #default="{ row }">{{ ruleChannels(row) }}</template></el-table-column>
-                  <el-table-column v-if="isAdmin" :label="t.field.action" width="150">
+                  <el-table-column v-if="isAdmin" :label="t.field.action" width="110">
                     <template #default="{ row }">
                       <el-button link type="primary" @click="openDrawer('rule', 'edit', row)">{{ t.edit }}</el-button>
                       <el-button link type="danger" @click="deleteEntity('rule', row.id)">{{ t.delete }}</el-button>
@@ -1995,14 +2019,32 @@ watch([alertPage, alertPageSize], async () => {
             </el-select>
           </el-form-item>
           <el-form-item v-if="ruleForm.rule_type === 'field_condition'" :label="t.field.operator"><el-select v-model="ruleForm.operator"><el-option v-for="operator in fieldOperatorOptions" :key="operator" :label="local(t.operators, operator)" :value="operator" /></el-select></el-form-item>
-          <el-form-item v-if="ruleForm.rule_type === 'field_condition' && operatorNeedsThreshold(ruleForm.operator)" :label="t.field.threshold"><el-input v-model="ruleForm.threshold_value" /></el-form-item>
+          <el-form-item v-if="ruleForm.rule_type === 'field_condition' && operatorNeedsThreshold(ruleForm.operator)" :label="t.field.threshold">
+            <el-input v-model="ruleForm.threshold_value" />
+            <div class="form-help">{{ t.thresholdHelp }}</div>
+          </el-form-item>
           <el-form-item v-if="ruleForm.rule_type === 'aggregate_condition'" :label="t.field.aggregate"><el-select v-model="ruleForm.aggregate_func"><el-option label="avg" value="avg" /><el-option label="max" value="max" /><el-option label="min" value="min" /><el-option label="median" value="median" /><el-option label="count" value="count" /></el-select></el-form-item>
           <el-form-item v-if="ruleForm.rule_type === 'aggregate_condition'" :label="t.field.operator"><el-select v-model="ruleForm.operator"><el-option v-for="operator in aggregateOperatorOptions" :key="operator" :label="local(t.operators, operator)" :value="operator" /></el-select></el-form-item>
-          <el-form-item v-if="ruleForm.rule_type === 'aggregate_condition'" :label="t.field.threshold"><el-input v-model="ruleForm.threshold_value" /></el-form-item>
+          <el-form-item v-if="ruleForm.rule_type === 'aggregate_condition'" :label="t.field.threshold">
+            <el-input v-model="ruleForm.threshold_value" />
+            <div class="form-help">{{ t.thresholdHelp }}</div>
+          </el-form-item>
           <el-form-item v-if="ruleForm.rule_type === 'aggregate_condition'" :label="t.field.window"><el-input-number v-model="ruleForm.aggregate_window_seconds" :min="1" /></el-form-item>
           <el-form-item :label="t.field.consecutive"><el-input-number v-model="ruleForm.consecutive_count" :min="1" /></el-form-item>
           <el-form-item :label="t.field.recovery"><el-input-number v-model="ruleForm.recovery_count" :min="1" /></el-form-item>
-          <el-form-item :label="t.field.severity"><el-select v-model="ruleForm.severity"><el-option v-for="(label, value) in t.severities" :key="value" :label="label" :value="value" /></el-select></el-form-item>
+          <el-form-item :label="t.field.severity"><el-select v-model="ruleForm.severity"><el-option v-for="(label, value) in t.severities" v-show="value !== 'recovered'" :key="value" :label="label" :value="value" /></el-select></el-form-item>
+          <el-form-item :label="t.field.combineGroup">
+            <el-select
+              v-model="ruleForm.combine_group"
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              :placeholder="locale === 'zh-CN' ? '选择或输入合并组别（可选）' : 'Select or enter combine group (optional)'"
+            >
+              <el-option v-for="g in existingCombineGroups" :key="g" :label="g" :value="g" />
+            </el-select>
+          </el-form-item>
           <el-form-item :label="t.field.channel"><el-select v-model="ruleForm.channel_ids" multiple><el-option v-for="channel in state.channels" :key="channel.id" :label="channel.name" :value="channel.id" /></el-select></el-form-item>
           <el-form-item :label="t.field.messageTemplate">
             <el-input v-model="ruleForm.message_template" type="textarea" />
@@ -2066,6 +2108,7 @@ watch([alertPage, alertPageSize], async () => {
           <el-table-column prop="consecutive_count" :label="t.field.consecutive" />
           <el-table-column prop="recovery_count" :label="t.field.recovery" />
           <el-table-column :label="t.field.severity"><template #default="{ row }">{{ local(t.severities, row.severity) }}</template></el-table-column>
+          <el-table-column prop="combine_group" :label="t.field.combineGroup" min-width="150" show-overflow-tooltip class-name="nowrap-column" label-class-name="nowrap-column" />
           <el-table-column :label="t.field.channels"><template #default="{ row }">{{ ruleChannels(row) }}</template></el-table-column>
           <el-table-column v-if="isAdmin" :label="t.field.action" width="150">
             <template #default="{ row }">

@@ -75,7 +75,7 @@ type Store interface {
 
 	AlertRulesForSample(ctx context.Context, sample Sample) ([]AlertRule, error)
 	WindowValues(ctx context.Context, itemID int64, fieldPath string, since time.Time, limit int) ([]float64, error)
-	ApplyAlertEvaluation(ctx context.Context, rule AlertRule, sample Sample, matched bool, currentValue, threshold string) (*AlertEvent, error)
+	ApplyAlertEvaluation(ctx context.Context, rule AlertRule, sample Sample, matched bool, transient bool, currentValue, threshold string) (*AlertEvent, error)
 	ListEvents(ctx context.Context, limit, offset int, since *time.Time) ([]AlertEvent, error)
 	CountEvents(ctx context.Context, since *time.Time) (int64, error)
 	ListEnabledChannelsForRule(ctx context.Context, ruleID int64) ([]Channel, error)
@@ -571,12 +571,40 @@ func (s *Service) EvaluateSample(ctx context.Context, sample Sample) error {
 	}
 	itemOverride := itemOverridesGroup(fieldsForSample(ctx, s.store, sample))
 
+	type ruleResult struct {
+		rule         AlertRule
+		matched      bool
+		currentValue string
+	}
+
+	var independentRules []ruleResult
+	combinedRules := make(map[string][]ruleResult)
+
 	for _, rule := range rules {
 		if itemOverride && rule.ScopeType == "group" && ruleUsesField(rule) {
 			continue
 		}
+		if sample.Status == "missing" {
+			if rule.RuleType != "missing_data" {
+				continue
+			}
+		} else if sample.Status == "error" {
+			if rule.RuleType != "request_failed" {
+				continue
+			}
+		}
 		matched, currentValue := s.ruleMatched(ctx, rule, sample, valueMap)
-		event, err := s.store.ApplyAlertEvaluation(ctx, rule, sample, matched, currentValue, rule.ThresholdValue)
+		res := ruleResult{rule: rule, matched: matched, currentValue: currentValue}
+		if rule.CombineGroup == "" {
+			independentRules = append(independentRules, res)
+		} else {
+			combinedRules[rule.CombineGroup] = append(combinedRules[rule.CombineGroup], res)
+		}
+	}
+
+	for _, res := range independentRules {
+		thresholdVal := s.getDisplayThreshold(sample.Raw, res.rule.ThresholdValue, res.rule.RuleType, res.rule.FieldPath, valueMap)
+		event, err := s.store.ApplyAlertEvaluation(ctx, res.rule, sample, res.matched, false, res.currentValue, thresholdVal)
 		if err != nil {
 			return err
 		}
@@ -586,6 +614,39 @@ func (s *Service) EvaluateSample(ctx context.Context, sample Sample) error {
 			}
 		}
 	}
+
+	for combineGroup, groupResults := range combinedRules {
+		matchCount := 0
+		for _, res := range groupResults {
+			if res.matched {
+				matchCount++
+			}
+		}
+
+		allMatched := matchCount == len(groupResults)
+		allRecovered := matchCount == 0
+		transient := !allMatched && !allRecovered
+
+		var groupEvents []AlertEvent
+		for _, res := range groupResults {
+			matchedParam := allMatched
+			thresholdVal := s.getDisplayThreshold(sample.Raw, res.rule.ThresholdValue, res.rule.RuleType, res.rule.FieldPath, valueMap)
+			event, err := s.store.ApplyAlertEvaluation(ctx, res.rule, sample, matchedParam, transient, res.currentValue, thresholdVal)
+			if err != nil {
+				return err
+			}
+			if event != nil {
+				groupEvents = append(groupEvents, *event)
+			}
+		}
+
+		if len(groupEvents) > 0 {
+			if err := s.NotifyCombined(ctx, combineGroup, groupEvents); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -620,6 +681,137 @@ func (s *Service) Notify(ctx context.Context, event AlertEvent) error {
 	return nil
 }
 
+func (s *Service) NotifyCombined(ctx context.Context, combineGroup string, events []AlertEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	channelMap := make(map[int64]Channel)
+	for _, event := range events {
+		chans, err := s.store.ListEnabledChannelsForRule(ctx, event.RuleID)
+		if err != nil {
+			continue
+		}
+		if len(chans) == 0 {
+			chans, _ = s.store.ListChannels(ctx)
+		}
+		for _, ch := range chans {
+			if ch.Enabled {
+				channelMap[ch.ID] = ch
+			}
+		}
+	}
+
+	locale := "zh-CN"
+	if settings, err := s.store.ListSettings(ctx); err == nil {
+		if value := settingValue(settings, "default_locale"); value != "" {
+			locale = value
+		}
+	}
+
+	eventType := events[0].EventType
+	highestSeverity := events[0].Severity
+	severityRank := map[string]int{"info": 1, "warning": 2, "critical": 3}
+	for _, ev := range events {
+		if severityRank[ev.Severity] > severityRank[highestSeverity] {
+			highestSeverity = ev.Severity
+		}
+	}
+
+	severityStr := localizedSeverity(locale, highestSeverity)
+	if eventType == "recovered" {
+		if locale == "zh-CN" {
+			severityStr = "恢复"
+		} else {
+			severityStr = "Recovered"
+		}
+	}
+
+	var title string
+	if locale == "zh-CN" {
+		title = fmt.Sprintf("合并报警 [%s]: %s", severityStr, combineGroup)
+	} else {
+		title = fmt.Sprintf("Combined Alert [%s]: %s", severityStr, combineGroup)
+	}
+
+	var messageParts []string
+	for _, ev := range events {
+		messageParts = append(messageParts, fmt.Sprintf("- %s: %s", ev.Title, ev.Message))
+	}
+	combinedMessage := strings.Join(messageParts, "\n")
+
+	for _, channel := range channelMap {
+		reqJSON, respText, err := s.sendCombinedChannelText(ctx, channel, title, combinedMessage)
+		status := "sent"
+		errMsg := ""
+		if err != nil {
+			status = "failed"
+			errMsg = err.Error()
+		}
+		if reqJSON == "" && status == "sent" {
+			status = "skipped"
+			respText = "channel type is not supported by sender"
+		}
+
+		for _, event := range events {
+			_ = s.store.CreateNotification(ctx, event.ID, channel.ID, status, reqJSON, respText, errMsg)
+		}
+	}
+	return nil
+}
+
+func (s *Service) sendCombinedChannelText(ctx context.Context, channel Channel, title, message string) (string, string, error) {
+	var cfg map[string]interface{}
+	_ = json.Unmarshal([]byte(channel.ConfigJSON), &cfg)
+	text := fmt.Sprintf("%s\n%s", title, message)
+
+	switch strings.ToLower(channel.Type) {
+	case "dingding", "dingtalk":
+		webhook := fmt.Sprint(cfg["webhook"])
+		if webhook == "" || webhook == "<nil>" {
+			return "", "", errors.New("missing dingding webhook")
+		}
+		secret := fmt.Sprint(cfg["secret"])
+		if secret != "" && secret != "<nil>" {
+			timestamp := time.Now().UnixNano() / int64(time.Millisecond)
+			stringToSign := fmt.Sprintf("%d\n%s", timestamp, secret)
+			h := hmac.New(sha256.New, []byte(secret))
+			h.Write([]byte(stringToSign))
+			sign := base64.StdEncoding.EncodeToString(h.Sum(nil))
+
+			u, err := url.Parse(webhook)
+			if err != nil {
+				return "", "", fmt.Errorf("parse dingding webhook URL: %w", err)
+			}
+			q := u.Query()
+			q.Set("timestamp", fmt.Sprintf("%d", timestamp))
+			q.Set("sign", sign)
+			u.RawQuery = q.Encode()
+			webhook = u.String()
+		}
+		body := map[string]interface{}{
+			"msgtype": "text",
+			"text": map[string]string{
+				"content": text,
+			},
+		}
+		return s.postJSON(ctx, webhook, body)
+	case "telegram":
+		token := fmt.Sprint(cfg["bot_token"])
+		chatID := fmt.Sprint(cfg["chat_id"])
+		if token == "" || token == "<nil>" || chatID == "" || chatID == "<nil>" {
+			return "", "", errors.New("missing telegram bot_token or chat_id")
+		}
+		body := map[string]interface{}{
+			"chat_id": chatID,
+			"text":    text,
+		}
+		return s.postJSON(ctx, "https://api.telegram.org/bot"+token+"/sendMessage", body)
+	default:
+		return "", "", nil
+	}
+}
+
 func (s *Service) ruleMatched(ctx context.Context, rule AlertRule, sample Sample, values map[string]SampleValue) (bool, string) {
 	switch rule.RuleType {
 	case "missing_data":
@@ -631,7 +823,8 @@ func (s *Service) ruleMatched(ctx context.Context, rule AlertRule, sample Sample
 		if !ok {
 			return rule.Operator == "not_exists", ""
 		}
-		return compareValue(value, rule.Operator, rule.ThresholdValue), sampleValueString(value)
+		threshold := s.resolveThreshold(sample.Raw, rule.ThresholdValue, value.ValueType)
+		return compareValue(value, rule.Operator, threshold), sampleValueString(value)
 	case "aggregate_condition":
 		window := 10 * time.Minute
 		if rule.AggregateWindowSeconds != nil && *rule.AggregateWindowSeconds > 0 {
@@ -642,9 +835,84 @@ func (s *Service) ruleMatched(ctx context.Context, rule AlertRule, sample Sample
 			return false, ""
 		}
 		current := aggregate(vals, rule.AggregateFunc)
-		return compareFloat(current, rule.Operator, rule.ThresholdValue), strconv.FormatFloat(current, 'f', -1, 64)
+		threshold := s.resolveThreshold(sample.Raw, rule.ThresholdValue, "float")
+		return compareFloat(current, rule.Operator, threshold), strconv.FormatFloat(current, 'f', -1, 64)
 	default:
 		return false, ""
+	}
+}
+
+func (s *Service) getDisplayThreshold(raw map[string]interface{}, thresholdSetting string, ruleType string, fieldPath string, valueMap map[string]SampleValue) string {
+	if !strings.HasPrefix(thresholdSetting, "json:") {
+		return thresholdSetting
+	}
+	targetType := "string"
+	if ruleType == "aggregate_condition" {
+		targetType = "float"
+	} else if val, ok := valueMap[fieldPath]; ok {
+		targetType = val.ValueType
+	}
+	resolved := s.resolveThreshold(raw, thresholdSetting, targetType)
+	return fmt.Sprintf("%s(%s)", thresholdSetting, resolved)
+}
+
+func (s *Service) resolveThreshold(raw map[string]interface{}, thresholdSetting string, targetType string) string {
+	if !strings.HasPrefix(thresholdSetting, "json:") {
+		return thresholdSetting
+	}
+	path := strings.TrimPrefix(thresholdSetting, "json:")
+	val, ok := valueAtPath(raw, path)
+	if !ok {
+		return ""
+	}
+
+	switch targetType {
+	case "integer", "float":
+		switch v := val.(type) {
+		case float64:
+			return strconv.FormatFloat(v, 'f', -1, 64)
+		case float32:
+			return strconv.FormatFloat(float64(v), 'f', -1, 64)
+		case int:
+			return strconv.Itoa(v)
+		case int64:
+			return strconv.FormatInt(v, 10)
+		case string:
+			return v
+		case bool:
+			if v {
+				return "1"
+			}
+			return "0"
+		default:
+			return fmt.Sprintf("%v", val)
+		}
+	case "boolean":
+		switch v := val.(type) {
+		case bool:
+			if v {
+				return "true"
+			}
+			return "false"
+		case float64:
+			if v != 0 {
+				return "true"
+			}
+			return "false"
+		case string:
+			vLower := strings.ToLower(strings.TrimSpace(v))
+			if vLower == "true" || vLower == "1" || vLower == "yes" || vLower == "on" {
+				return "true"
+			}
+			return "false"
+		default:
+			return fmt.Sprintf("%v", val)
+		}
+	default:
+		if sVal, ok := val.(string); ok {
+			return sVal
+		}
+		return fmt.Sprintf("%v", val)
 	}
 }
 
@@ -794,17 +1062,22 @@ func effectiveFields(fields []FieldDefinition) []FieldDefinition {
 }
 
 func sampleRaw(values []SampleValue, fallback map[string]interface{}) map[string]interface{} {
-	if len(values) == 0 {
-		if errValue, ok := fallback["error"]; ok {
-			return map[string]interface{}{"error": errValue}
+	res := make(map[string]interface{})
+	for k, v := range fallback {
+		res[k] = v
+	}
+	if len(values) > 0 {
+		fields := make(map[string]interface{}, len(values))
+		for _, value := range values {
+			fields[value.FieldPath] = value.RawValue
 		}
-		return map[string]interface{}{}
+		res["fields"] = fields
+	} else {
+		if errValue, ok := fallback["error"]; ok {
+			res["error"] = errValue
+		}
 	}
-	fields := make(map[string]interface{}, len(values))
-	for _, value := range values {
-		fields[value.FieldPath] = value.RawValue
-	}
-	return map[string]interface{}{"fields": fields}
+	return res
 }
 
 func (s *Service) sendChannel(ctx context.Context, channel Channel, event AlertEvent) (string, string, error) {
@@ -996,6 +1269,8 @@ func localizedSeverity(locale, severity string) string {
 			return "警告"
 		case "critical":
 			return "严重"
+		case "recovered":
+			return "恢复"
 		}
 	}
 	switch severity {
@@ -1005,6 +1280,8 @@ func localizedSeverity(locale, severity string) string {
 		return "Warning"
 	case "critical":
 		return "Critical"
+	case "recovered":
+		return "Recovered"
 	default:
 		return severity
 	}

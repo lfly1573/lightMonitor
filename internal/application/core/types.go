@@ -187,6 +187,7 @@ type AlertRule struct {
 	RecoveryCount          int     `json:"recovery_count"`
 	Severity               string  `json:"severity"`
 	MessageTemplate        string  `json:"message_template"`
+	CombineGroup           string  `json:"combine_group"`
 	Enabled                bool    `json:"enabled"`
 	ChannelIDs             []int64 `json:"channel_ids,omitempty"`
 }
@@ -211,6 +212,7 @@ type AlertRuleInput struct {
 	RecoveryCount          int     `json:"recovery_count"`
 	Severity               string  `json:"severity"`
 	MessageTemplate        string  `json:"message_template"`
+	CombineGroup           string  `json:"combine_group"`
 	Enabled                *bool   `json:"enabled"`
 	ChannelIDs             []int64 `json:"channel_ids,omitempty"`
 }

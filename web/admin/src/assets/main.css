@@ -550,3 +550,9 @@ body {
   color: #d97706 !important;
   font-weight: bold;
 }
+
+.nowrap-column,
+.nowrap-column .cell {
+  white-space: nowrap !important;
+  word-break: keep-all !important;
+}
