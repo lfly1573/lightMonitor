@@ -1551,11 +1551,23 @@ func (s *Store) Dashboard(ctx context.Context) (core.Dashboard, error) {
 }
 
 func (s *Store) Cleanup(ctx context.Context, before time.Time) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM monitor_samples WHERE received_at < ?`, before.Format(time.RFC3339Nano))
+	beforeStr := before.Format(time.RFC3339Nano)
+
+	// Explicitly delete child/cascade records first to ensure bulletproof cleanup
+	// even if foreign key enforcement is temporarily disabled or not pooled.
+	_, err := s.db.ExecContext(ctx, `DELETE FROM monitor_sample_values WHERE received_at < ?`, beforeStr)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM alert_events WHERE occurred_at < ?`, before.Format(time.RFC3339Nano))
+	_, err = s.db.ExecContext(ctx, `DELETE FROM monitor_samples WHERE received_at < ?`, beforeStr)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM alert_notifications WHERE event_id IN (SELECT id FROM alert_events WHERE occurred_at < ?)`, beforeStr)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM alert_events WHERE occurred_at < ?`, beforeStr)
 	return err
 }
 

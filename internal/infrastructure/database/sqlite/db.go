@@ -10,7 +10,11 @@ import (
 )
 
 func Open(ctx context.Context, path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn := path
+	if !strings.Contains(path, "?") {
+		dsn = path + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
