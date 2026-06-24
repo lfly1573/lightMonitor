@@ -48,7 +48,7 @@ func isDatabaseNotInstalled(err error) bool {
 }
 
 func (s *Scheduler) pollActiveRequests(ctx context.Context) error {
-	requests, err := s.store.ListActiveRequests(ctx)
+	requests, err := s.store.ListActiveRequests(ctx, 0)
 	if err != nil {
 		return err
 	}

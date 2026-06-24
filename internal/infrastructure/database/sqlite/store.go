@@ -366,16 +366,22 @@ func (s *Store) itemByID(ctx context.Context, id int64) (core.Item, error) {
 	return scanItem(row)
 }
 
-func (s *Store) ListActiveRequests(ctx context.Context) ([]core.ActiveRequest, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (s *Store) ListActiveRequests(ctx context.Context, groupID int64) ([]core.ActiveRequest, error) {
+	query := `
 		SELECT ar.id, ar.group_id, ar.item_id, ar.name, ar.url, ar.method, ar.headers_json, ar.body_type,
 		       ar.body_json, ar.interval_seconds, ar.timeout_seconds, ar.expected_status_code,
 		       ar.enabled, COALESCE(mi.last_seen_at, '')
 		FROM active_requests ar
 		JOIN monitor_items mi ON mi.id = ar.item_id
 		WHERE ar.deleted_at IS NULL
-		ORDER BY ar.id DESC
-	`)
+	`
+	args := []interface{}{}
+	if groupID > 0 {
+		query += " AND ar.group_id = ?"
+		args = append(args, groupID)
+	}
+	query += " ORDER BY ar.id DESC"
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -687,8 +693,8 @@ func (s *Store) channelByID(ctx context.Context, id int64) (core.Channel, error)
 	return scanChannel(row)
 }
 
-func (s *Store) ListRules(ctx context.Context) ([]core.AlertRule, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (s *Store) ListRules(ctx context.Context, groupID int64) ([]core.AlertRule, error) {
+	query := `
 		SELECT id, name, scope_type, group_id, item_id, field_definition_id, source_type, rule_type,
 		       COALESCE(field_path, ''), COALESCE(value_type, ''), COALESCE(operator, ''),
 		       COALESCE(threshold_value, ''), COALESCE(aggregate_func, ''),
@@ -696,8 +702,14 @@ func (s *Store) ListRules(ctx context.Context) ([]core.AlertRule, error) {
 		       severity, message_template, enabled, COALESCE(combine_group, '')
 		FROM alert_rules
 		WHERE deleted_at IS NULL
-		ORDER BY id DESC
-	`)
+	`
+	args := []interface{}{}
+	if groupID > 0 {
+		query += " AND group_id = ?"
+		args = append(args, groupID)
+	}
+	query += " ORDER BY id DESC"
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1209,6 +1221,7 @@ func (s *Store) Stats(ctx context.Context, groupID, itemID int64, fieldPath stri
 		GeneratedAt: time.Now().Format(time.RFC3339Nano),
 	}
 	var nums []float64
+	var latestRaw string
 	for rows.Next() {
 		var at string
 		var numeric sql.NullFloat64
@@ -1218,12 +1231,15 @@ func (s *Store) Stats(ctx context.Context, groupID, itemID int64, fieldPath stri
 		}
 		result.Count++
 		result.LatestAt = at
-		_ = json.Unmarshal([]byte(raw), &result.Latest)
+		latestRaw = raw
 		if numeric.Valid {
 			value := numeric.Float64
 			nums = append(nums, value)
 			result.Series = append(result.Series, core.Point{Time: at, Value: &value})
 		}
+	}
+	if latestRaw != "" {
+		_ = json.Unmarshal([]byte(latestRaw), &result.Latest)
 	}
 	if len(nums) > 0 {
 		result.Avg = floatPtr(avg(nums))
@@ -1434,7 +1450,7 @@ func renderAlertMessage(message string, rule core.AlertRule, sample core.Sample,
 	return message
 }
 
-func (s *Store) ListEvents(ctx context.Context, limit, offset int, since *time.Time) ([]core.AlertEvent, error) {
+func (s *Store) ListEvents(ctx context.Context, limit, offset int, since *time.Time, groupID int64) ([]core.AlertEvent, error) {
 	query := `
 		SELECT id, rule_id, group_id, item_id, sample_id, event_type, severity, title,
 		       message, field_path, current_value, threshold_value, occurred_at
@@ -1445,6 +1461,10 @@ func (s *Store) ListEvents(ctx context.Context, limit, offset int, since *time.T
 	if since != nil {
 		query += " AND occurred_at >= ?"
 		args = append(args, since.Format(time.RFC3339Nano))
+	}
+	if groupID > 0 {
+		query += " AND group_id = ?"
+		args = append(args, groupID)
 	}
 	query += " ORDER BY occurred_at DESC, id DESC"
 	if limit > 0 {
@@ -1472,12 +1492,16 @@ func (s *Store) ListEvents(ctx context.Context, limit, offset int, since *time.T
 	return events, rows.Err()
 }
 
-func (s *Store) CountEvents(ctx context.Context, since *time.Time) (int64, error) {
+func (s *Store) CountEvents(ctx context.Context, since *time.Time, groupID int64) (int64, error) {
 	query := "SELECT COUNT(*) FROM alert_events WHERE 1 = 1"
 	args := []interface{}{}
 	if since != nil {
 		query += " AND occurred_at >= ?"
 		args = append(args, since.Format(time.RFC3339Nano))
+	}
+	if groupID > 0 {
+		query += " AND group_id = ?"
+		args = append(args, groupID)
 	}
 	var count int64
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(&count)
@@ -1542,7 +1566,7 @@ func (s *Store) Dashboard(ctx context.Context) (core.Dashboard, error) {
 			return core.Dashboard{}, err
 		}
 	}
-	events, err := s.ListEvents(ctx, 8, 0, nil)
+	events, err := s.ListEvents(ctx, 8, 0, nil, 0)
 	if err != nil {
 		return core.Dashboard{}, err
 	}

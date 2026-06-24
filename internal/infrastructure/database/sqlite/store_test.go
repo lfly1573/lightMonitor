@@ -104,7 +104,7 @@ func TestPassiveReceiveCoercesFieldsAndTriggersAlert(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, _, err := service.Events(ctx, 10, 0, nil)
+	events, _, err := service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestCheckMissingAlertsNeverReportedPassiveItem(t *testing.T) {
 	if len(samples) != 1 || samples[0].Status != "missing" {
 		t.Fatalf("samples = %#v, want one missing sample", samples)
 	}
-	events, _, err := service.Events(ctx, 10, 0, nil)
+	events, _, err := service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestPassiveReceiveSilencedWhenItemAlertDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, _, err := service.Events(ctx, 10, 0, nil)
+	events, _, err := service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +686,7 @@ func TestPassiveReceiveObjectArray(t *testing.T) {
 	}
 
 	// 9. Verify high temperature warning alert was triggered
-	events, _, err := service.Events(ctx, 10, 0, nil)
+	events, _, err := service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -890,7 +890,7 @@ func TestCombineAlertGroupLogic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, _, err := service.Events(ctx, 10, 0, nil)
+	events, _, err := service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -911,7 +911,7 @@ func TestCombineAlertGroupLogic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, _, err = service.Events(ctx, 10, 0, nil)
+	events, _, err = service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -942,7 +942,7 @@ func TestCombineAlertGroupLogic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, _, err = service.Events(ctx, 10, 0, nil)
+	events, _, err = service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -963,7 +963,7 @@ func TestCombineAlertGroupLogic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, _, err = service.Events(ctx, 10, 0, nil)
+	events, _, err = service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1057,7 +1057,7 @@ func TestRuleEvaluationStatusSkipping(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, _, err := service.Events(ctx, 10, 0, nil)
+	events, _, err := service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1091,7 +1091,7 @@ func TestRuleEvaluationStatusSkipping(t *testing.T) {
 	}
 
 	// Verify that NO recovery event has been generated, and rule state remains alerting
-	events, _, err = service.Events(ctx, 10, 0, nil)
+	events, _, err = service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1121,7 +1121,7 @@ func TestRuleEvaluationStatusSkipping(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, _, err = service.Events(ctx, 10, 0, nil)
+	events, _, err = service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1210,7 +1210,7 @@ func TestRuleEvaluationJSONThreshold(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, _, err := service.Events(ctx, 10, 0, nil)
+	events, _, err := service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1240,7 +1240,7 @@ func TestRuleEvaluationJSONThreshold(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, _, err = service.Events(ctx, 10, 0, nil)
+	events, _, err = service.Events(ctx, 10, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

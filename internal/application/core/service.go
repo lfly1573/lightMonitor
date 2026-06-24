@@ -51,7 +51,7 @@ type Store interface {
 	UpdateItem(ctx context.Context, id int64, input ItemInput) (Item, error)
 	DeleteItem(ctx context.Context, id int64) error
 
-	ListActiveRequests(ctx context.Context) ([]ActiveRequest, error)
+	ListActiveRequests(ctx context.Context, groupID int64) ([]ActiveRequest, error)
 	CreateActiveRequest(ctx context.Context, input ActiveRequestInput) (ActiveRequest, error)
 	UpdateActiveRequest(ctx context.Context, id int64, input ActiveRequestInput) (ActiveRequest, error)
 	DeleteActiveRequest(ctx context.Context, id int64) error
@@ -64,7 +64,7 @@ type Store interface {
 	UpsertChannel(ctx context.Context, input ChannelInput) (Channel, error)
 	DeleteChannel(ctx context.Context, id int64) error
 
-	ListRules(ctx context.Context) ([]AlertRule, error)
+	ListRules(ctx context.Context, groupID int64) ([]AlertRule, error)
 	UpsertRule(ctx context.Context, input AlertRuleInput) (AlertRule, error)
 	DeleteRule(ctx context.Context, id int64) error
 
@@ -76,8 +76,8 @@ type Store interface {
 	AlertRulesForSample(ctx context.Context, sample Sample) ([]AlertRule, error)
 	WindowValues(ctx context.Context, itemID int64, fieldPath string, since time.Time, limit int) ([]float64, error)
 	ApplyAlertEvaluation(ctx context.Context, rule AlertRule, sample Sample, matched bool, transient bool, currentValue, threshold string) (*AlertEvent, error)
-	ListEvents(ctx context.Context, limit, offset int, since *time.Time) ([]AlertEvent, error)
-	CountEvents(ctx context.Context, since *time.Time) (int64, error)
+	ListEvents(ctx context.Context, limit, offset int, since *time.Time, groupID int64) ([]AlertEvent, error)
+	CountEvents(ctx context.Context, since *time.Time, groupID int64) (int64, error)
 	ListEnabledChannelsForRule(ctx context.Context, ruleID int64) ([]Channel, error)
 	CreateNotification(ctx context.Context, eventID, channelID int64, status, requestJSON, responseText, errorMessage string) error
 	Dashboard(ctx context.Context) (Dashboard, error)
@@ -168,8 +168,8 @@ func (s *Service) DeleteItem(ctx context.Context, id int64) error {
 	return s.store.DeleteItem(ctx, id)
 }
 
-func (s *Service) ActiveRequests(ctx context.Context) ([]ActiveRequest, error) {
-	return s.store.ListActiveRequests(ctx)
+func (s *Service) ActiveRequests(ctx context.Context, groupID int64) ([]ActiveRequest, error) {
+	return s.store.ListActiveRequests(ctx, groupID)
 }
 
 func (s *Service) CreateActiveRequest(ctx context.Context, input ActiveRequestInput) (ActiveRequest, error) {
@@ -208,8 +208,8 @@ func (s *Service) DeleteChannel(ctx context.Context, id int64) error {
 	return s.store.DeleteChannel(ctx, id)
 }
 
-func (s *Service) Rules(ctx context.Context) ([]AlertRule, error) {
-	return s.store.ListRules(ctx)
+func (s *Service) Rules(ctx context.Context, groupID int64) ([]AlertRule, error) {
+	return s.store.ListRules(ctx, groupID)
 }
 
 func (s *Service) UpsertRule(ctx context.Context, input AlertRuleInput) (AlertRule, error) {
@@ -418,15 +418,15 @@ func (s *Service) Stats(ctx context.Context, groupID, itemID int64, fieldPath st
 	return s.store.Stats(ctx, groupID, itemID, fieldPath, since)
 }
 
-func (s *Service) Events(ctx context.Context, limit, offset int, since *time.Time) ([]AlertEvent, int64, error) {
+func (s *Service) Events(ctx context.Context, limit, offset int, since *time.Time, groupID int64) ([]AlertEvent, int64, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	events, err := s.store.ListEvents(ctx, limit, offset, since)
+	events, err := s.store.ListEvents(ctx, limit, offset, since, groupID)
 	if err != nil {
 		return nil, 0, err
 	}
-	total, err := s.store.CountEvents(ctx, since)
+	total, err := s.store.CountEvents(ctx, since, groupID)
 	if err != nil {
 		return nil, 0, err
 	}

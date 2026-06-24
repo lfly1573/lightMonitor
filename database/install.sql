@@ -357,6 +357,9 @@ CREATE INDEX IF NOT EXISTS idx_alert_rules_scope
 CREATE INDEX IF NOT EXISTS idx_alert_rules_type
     ON alert_rules (rule_type, enabled, deleted_at);
 
+CREATE INDEX IF NOT EXISTS idx_alert_rules_group_id
+    ON alert_rules (group_id, deleted_at);
+
 CREATE TABLE IF NOT EXISTS alert_rule_channels (
     rule_id INTEGER NOT NULL,
     channel_id INTEGER NOT NULL,

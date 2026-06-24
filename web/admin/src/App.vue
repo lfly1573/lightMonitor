@@ -785,11 +785,11 @@ async function loadPageData(menu: string) {
     const groupID = Number(menu.slice(6))
     const [items, activeRequests, fields, rules, samples, events] = await Promise.all([
       api<Item[]>(`/api/items?group_id=${groupID}`),
-      api<ActiveRequest[]>('/api/active-requests'),
-      api<FieldDefinition[]>('/api/fields'),
-      api<AlertRule[]>('/api/rules'),
+      api<ActiveRequest[]>(`/api/active-requests?group_id=${groupID}`),
+      api<FieldDefinition[]>(`/api/fields?group_id=${groupID}`),
+      api<AlertRule[]>(`/api/rules?group_id=${groupID}`),
       api<Sample[]>(`/api/samples?group_id=${groupID}&latest=true`),
-      api<AlertEvent[]>('/api/events?since_hours=24'),
+      api<AlertEvent[]>(`/api/events?since_hours=24&group_id=${groupID}`),
     ])
     state.items = items || []
     state.activeRequests = activeRequests || []

@@ -226,7 +226,7 @@ func (h *APIHandler) DeleteItem(c *gin.Context) {
 }
 
 func (h *APIHandler) ActiveRequests(c *gin.Context) {
-	requests, err := h.service.ActiveRequests(c.Request.Context())
+	requests, err := h.service.ActiveRequests(c.Request.Context(), queryInt64(c, "group_id"))
 	if err != nil {
 		writeError(c, err)
 		return
@@ -329,7 +329,7 @@ func (h *APIHandler) DeleteChannel(c *gin.Context) {
 }
 
 func (h *APIHandler) Rules(c *gin.Context) {
-	rules, err := h.service.Rules(c.Request.Context())
+	rules, err := h.service.Rules(c.Request.Context(), queryInt64(c, "group_id"))
 	if err != nil {
 		writeError(c, err)
 		return
@@ -405,7 +405,7 @@ func (h *APIHandler) Events(c *gin.Context) {
 		}
 	}
 
-	events, total, err := h.service.Events(c.Request.Context(), queryInt(c, "limit"), offset, since)
+	events, total, err := h.service.Events(c.Request.Context(), queryInt(c, "limit"), offset, since, queryInt64(c, "group_id"))
 	if err != nil {
 		writeError(c, err)
 		return

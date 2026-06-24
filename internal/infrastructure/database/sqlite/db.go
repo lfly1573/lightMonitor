@@ -405,5 +405,29 @@ func migrateCompat(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	// 8. Create index idx_sample_values_field_time to optimize stats queries
+	if _, err := db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_sample_values_field_time
+		ON monitor_sample_values (group_id, item_id, field_path, received_at)
+	`); err != nil {
+		return err
+	}
+
+	// 9. Create index idx_alert_rules_group_id to optimize group-scoped rule queries
+	if _, err := db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_alert_rules_group_id
+		ON alert_rules (group_id, deleted_at)
+	`); err != nil {
+		return err
+	}
+
+	// 10. Create index idx_alert_events_target_time to optimize group events queries
+	if _, err := db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_alert_events_target_time
+		ON alert_events (group_id, item_id, occurred_at)
+	`); err != nil {
+		return err
+	}
+
 	return nil
 }
