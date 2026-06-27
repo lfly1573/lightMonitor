@@ -54,6 +54,7 @@ interface Item {
   ref_item_id?: number
   ref_item_name?: string
   last_seen_at?: string
+  created_at?: string
 }
 
 interface ActiveRequest {
@@ -119,6 +120,7 @@ interface AlertRule {
   severity: string
   message_template: string
   combine_group: string
+  continuous_alert?: boolean
   enabled: boolean
   channel_ids?: number[]
 }
@@ -191,6 +193,10 @@ const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true'
 const groupActiveTab = ref('items')
 const itemPage = ref(1)
 const itemPageSize = ref(20)
+const itemNameSearch = ref('')
+const itemStatusFilter = ref('')
+const itemSortProp = ref('')
+const itemSortOrder = ref('')
 
 const state = reactive({
   dashboard: { groups: 0, items: 0, samples_24h: 0, alerting_rules: 0, recent_events: [] as AlertEvent[] },
@@ -292,6 +298,7 @@ const ruleForm = reactive({
   severity: 'warning',
   message_template: '',
   combine_group: '',
+  continuous_alert: false,
   enabled: true,
   channel_ids: [] as number[],
 })
@@ -328,6 +335,7 @@ const text = {
     collapse: '收起菜单',
     expand: '展开菜单',
     add: '添加',
+    search: '搜索',
     edit: '编辑',
     delete: '删除',
     cancel: '取消',
@@ -335,7 +343,7 @@ const text = {
     saved: '已保存',
     deleted: '已删除',
     confirmDelete: '确认删除该记录？',
-    emptyFields: '未设定监控字段，仅检测成功状态。',
+    emptyFields: '未设定',
     inherited: '继承分组字段',
     overridden: '该条目已单独设定字段，分组字段不生效。',
     noGroup: '请先创建或选择一个分组。',
@@ -371,11 +379,17 @@ const text = {
       hourlyAlerts: '最近24小时报警',
       normalItems: '成功条目',
       totalItems: '总条目',
-      inheritedFields: '继承分组字段',
+      inheritedFields: '自定义字段',
       ownFields: '单独设定字段',
       timeRange: '时间范围',
     },
     field: {
+      continuousAlert: '持续报警',
+      createdDate: '添加日期',
+      searchPlaceholder: '搜索名称',
+      statusAll: '所有状态',
+      statusOk: '正常',
+      statusError: '异常',
       action: '操作',
       code: '标记',
       name: '名称',
@@ -462,6 +476,7 @@ const text = {
     collapse: 'Collapse menu',
     expand: 'Expand menu',
     add: 'Add',
+    search: 'Search',
     edit: 'Edit',
     delete: 'Delete',
     cancel: 'Cancel',
@@ -469,7 +484,7 @@ const text = {
     saved: 'Saved',
     deleted: 'Deleted',
     confirmDelete: 'Delete this record?',
-    emptyFields: 'No monitored fields. Only success status is checked.',
+    emptyFields: 'Not Set',
     inherited: 'Using group fields',
     overridden: 'This item has its own fields. Group fields are disabled for it.',
     noGroup: 'Create or select a group first.',
@@ -505,11 +520,17 @@ const text = {
       hourlyAlerts: 'Alerts in Last 24 Hours',
       normalItems: 'Successful Items',
       totalItems: 'Total Items',
-      inheritedFields: 'Using Group Fields',
+      inheritedFields: 'Custom Fields',
       ownFields: 'Own Fields',
       timeRange: 'Time Range',
     },
     field: {
+      continuousAlert: 'Continuous Alert',
+      createdDate: 'Created Date',
+      searchPlaceholder: 'Search by name',
+      statusAll: 'All statuses',
+      statusOk: 'Success',
+      statusError: 'Alerting',
       action: 'Action',
       code: 'Code',
       name: 'Name',
@@ -590,9 +611,12 @@ const isAdmin = computed(() => currentUser.value?.role === 'admin')
 const selectedGroupID = computed(() => activeMenu.value.startsWith('group:') ? Number(activeMenu.value.slice(6)) : 0)
 const selectedGroup = computed(() => state.groups.find((group) => group.id === selectedGroupID.value))
 const selectedGroupItems = computed(() => state.items.filter((item) => item.group_id === selectedGroupID.value))
+const filteredAndSortedGroupItems = computed(() => {
+  return [...selectedGroupItems.value]
+})
 const pagedSelectedGroupItems = computed(() => {
   const start = (itemPage.value - 1) * itemPageSize.value
-  return selectedGroupItems.value.slice(start, start + itemPageSize.value)
+  return filteredAndSortedGroupItems.value.slice(start, start + itemPageSize.value)
 })
 const selectedGroupFields = computed(() => state.fields.filter((field) => field.scope_type === 'group' && field.group_id === selectedGroupID.value))
 const selectedGroupRules = computed(() => state.rules.filter((rule) => rule.scope_type === 'group' && rule.group_id === selectedGroupID.value))
@@ -784,7 +808,7 @@ async function loadPageData(menu: string) {
   } else if (menu.startsWith('group:')) {
     const groupID = Number(menu.slice(6))
     const [items, activeRequests, fields, rules, samples, events] = await Promise.all([
-      api<Item[]>(`/api/items?group_id=${groupID}`),
+      api<Item[]>(`/api/items?group_id=${groupID}&q=${itemNameSearch.value}&status=${itemStatusFilter.value}&sort_prop=${itemSortProp.value}&sort_order=${itemSortOrder.value}`),
       api<ActiveRequest[]>(`/api/active-requests?group_id=${groupID}`),
       api<FieldDefinition[]>(`/api/fields?group_id=${groupID}`),
       api<AlertRule[]>(`/api/rules?group_id=${groupID}`),
@@ -1401,6 +1425,16 @@ function itemFieldMode(itemID: number) {
   return ownItemFields(itemID).length ? t.value.labels.ownFields : t.value.labels.inheritedFields
 }
 
+async function handleItemSortChange({ prop, order }: { prop: string | null, order: string | null }) {
+  itemSortProp.value = prop || ''
+  itemSortOrder.value = order || ''
+  await fetchGroupItems()
+}
+
+async function fetchGroupItems() {
+  await loadPageData(activeMenu.value)
+}
+
 onMounted(async () => {
   document.documentElement.lang = locale.value
   window.addEventListener('resize', resizeCharts)
@@ -1445,6 +1479,14 @@ watch(selectedGroupID, () => {
   itemPage.value = 1
   groupEventPage.value = 1
   groupActiveTab.value = 'items'
+  itemNameSearch.value = ''
+  itemStatusFilter.value = ''
+  itemSortProp.value = ''
+  itemSortOrder.value = ''
+})
+
+watch([itemNameSearch, itemStatusFilter], () => {
+  itemPage.value = 1
 })
 
 watch([selectedTimeZone, locale], () => {
@@ -1750,10 +1792,30 @@ watch([alertPage, alertPageSize], async () => {
             <el-tabs v-model="groupActiveTab">
               <el-tab-pane :label="t.labels.items" name="items">
                 <div class="tab-toolbar">
-                  <span></span>
+                  <div class="toolbar-left">
+                    <el-input
+                      v-model="itemNameSearch"
+                      :placeholder="t.field.searchPlaceholder"
+                      :prefix-icon="Icons.Search"
+                      clearable
+                      class="search-input"
+                      @keyup.enter="fetchGroupItems"
+                    />
+                    <el-select
+                      v-model="itemStatusFilter"
+                      :placeholder="t.field.status"
+                      clearable
+                      class="status-select"
+                    >
+                      <el-option :label="t.field.statusAll" value="" />
+                      <el-option :label="t.field.statusOk" value="ok" />
+                      <el-option :label="t.field.statusError" value="error" />
+                    </el-select>
+                    <el-button type="primary" :icon="Icons.Search" @click="fetchGroupItems">{{ t.search }}</el-button>
+                  </div>
                   <el-button v-if="isAdmin" type="primary" :icon="Icons.Plus" @click="openDrawer('active', 'create', undefined, { group_id: selectedGroup.id })">{{ t.add }}</el-button>
                 </div>
-                <el-table :data="pagedSelectedGroupItems">
+                <el-table :data="pagedSelectedGroupItems" @sort-change="handleItemSortChange">
                   <el-table-column type="expand" width="42">
                     <template #default="{ row }">
                       <div class="item-detail">
@@ -1781,7 +1843,11 @@ watch([alertPage, alertPageSize], async () => {
                           <el-button v-if="isAdmin" size="small" type="primary" :icon="Icons.Plus" @click="openDrawer('rule', 'create', undefined, { scope_type: 'item', group_id: row.group_id, item_id: row.id })">{{ t.add }}</el-button>
                         </div>
                         <el-table :data="itemRules(row.id)" size="small" empty-text="-">
-                          <el-table-column prop="name" :label="t.field.name" />
+                          <el-table-column prop="name" :label="t.field.name">
+                            <template #default="{ row: rule }">
+                              <span :class="{ 'disabled-item-name': !rule.enabled }">{{ rule.name }}</span>
+                            </template>
+                          </el-table-column>
                           <el-table-column prop="field_path" :label="t.field.fieldPath" min-width="120" show-overflow-tooltip class-name="nowrap-column" label-class-name="nowrap-column" />
                           <el-table-column :label="t.field.ruleType"><template #default="{ row: rule }">{{ local(t.ruleTypes, rule.rule_type) }}</template></el-table-column>
                           <el-table-column :label="t.field.operator"><template #default="{ row: rule }">{{ ruleOperator(rule) }}</template></el-table-column>
@@ -1801,34 +1867,45 @@ watch([alertPage, alertPageSize], async () => {
                       </div>
                     </template>
                   </el-table-column>
-                  <el-table-column prop="name" :label="t.field.name" min-width="180" />
-                  <el-table-column v-if="hasObjectArrayFields" prop="ref_item_name" :label="t.field.refItem" min-width="130" />
-                  <el-table-column :label="t.field.source" width="90"><template #default="{ row }">{{ local(t.sourceTypes, row.source_type) }}</template></el-table-column>
-                  <el-table-column :label="t.field.status" width="90"><template #default="{ row }"><el-tag :type="latestSample(row.id)?.status === 'ok' ? 'success' : 'warning'">{{ latestSample(row.id)?.status || '-' }}</el-tag></template></el-table-column>
-                  <el-table-column :label="t.labels.latestFields" min-width="260">
+                  <el-table-column prop="name" :label="t.field.name" min-width="130" sortable="custom">
                     <template #default="{ row }">
-                      <div v-if="effectiveFieldsForItem(row).length" class="field-chips">
-                        <el-button
-                          v-for="field in effectiveFieldsForItem(row)"
-                          :key="`${row.id}-${field.id}`"
-                          link
-                          type="primary"
-                          @click="openFieldDetail(row, field)"
-                        >
-                          {{ fieldLabel(field) }}: {{ valueText(sampleValue(latestSample(row.id), field.field_path)) }}{{ field.unit }}
-                        </el-button>
+                      <span :class="{ 'disabled-item-name': !row.enabled }">{{ row.name }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column v-if="hasObjectArrayFields" prop="ref_item_name" :label="t.field.refItem" min-width="110" />
+                  <el-table-column :label="t.field.source" width="75"><template #default="{ row }">{{ local(t.sourceTypes, row.source_type) }}</template></el-table-column>
+                  <el-table-column prop="status" :label="t.field.status" width="100" sortable="custom">
+                    <template #default="{ row }"><el-tag :type="latestSample(row.id)?.status === 'ok' ? 'success' : 'warning'">{{ latestSample(row.id)?.status || '-' }}</el-tag></template>
+                  </el-table-column>
+                  <el-table-column :label="t.labels.latestFields" min-width="150">
+                    <template #default="{ row }">
+                      <div class="field-vertical-list">
+                        <div v-if="ownItemFields(row.id).length" class="field-item-row" style="margin-bottom: 4px;">
+                          <el-tag type="warning" effect="dark" size="small">{{ t.labels.inheritedFields }}</el-tag>
+                        </div>
+                        <template v-if="effectiveFieldsForItem(row).length">
+                          <div
+                            v-for="field in effectiveFieldsForItem(row)"
+                            :key="`${row.id}-${field.id}`"
+                            class="field-item-row"
+                          >
+                            <el-button
+                              link
+                              type="primary"
+                              @click="openFieldDetail(row, field)"
+                            >
+                              {{ fieldLabel(field) }}: {{ valueText(sampleValue(latestSample(row.id), field.field_path)) }}{{ field.unit }}
+                            </el-button>
+                          </div>
+                        </template>
+                        <span v-else-if="!ownItemFields(row.id).length" class="muted">{{ t.emptyFields }}</span>
                       </div>
-                      <span v-else class="muted">{{ t.emptyFields }}</span>
                     </template>
                   </el-table-column>
-                  <el-table-column :label="t.labels.inheritedFields" min-width="130">
-                    <template #default="{ row }">
-                      <span :class="{ 'own-fields-text': ownItemFields(row.id).length }">
-                        {{ itemFieldMode(row.id) }}
-                      </span>
-                    </template>
+                  <el-table-column prop="created_at" :label="t.field.createdDate" min-width="145" sortable="custom">
+                    <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
                   </el-table-column>
-                  <el-table-column :label="t.field.lastSeen" min-width="170">
+                  <el-table-column prop="last_seen_at" :label="t.field.lastSeen" min-width="145" sortable="custom">
                     <template #default="{ row }">{{ formatDateTime(row.last_seen_at) }}</template>
                   </el-table-column>
                   <el-table-column v-if="isAdmin" :label="t.field.action" width="130">
@@ -1844,7 +1921,7 @@ watch([alertPage, alertPageSize], async () => {
                   class="table-pagination"
                   layout="total, sizes, prev, pager, next"
                   :page-sizes="[20, 50, 100, 200]"
-                  :total="selectedGroupItems.length"
+                  :total="filteredAndSortedGroupItems.length"
                   @size-change="handleItemPageSize"
                 />
               </el-tab-pane>
@@ -1876,8 +1953,12 @@ watch([alertPage, alertPageSize], async () => {
                   <span></span>
                   <el-button v-if="isAdmin" type="primary" :icon="Icons.Plus" @click="openDrawer('rule', 'create', undefined, { scope_type: 'group', group_id: selectedGroup.id })">{{ t.add }}</el-button>
                 </div>
-                <el-table :data="selectedGroupRules">
-                  <el-table-column prop="name" :label="t.field.name" />
+                 <el-table :data="selectedGroupRules">
+                  <el-table-column prop="name" :label="t.field.name">
+                    <template #default="{ row }">
+                      <span :class="{ 'disabled-item-name': !row.enabled }">{{ row.name }}</span>
+                    </template>
+                  </el-table-column>
                   <el-table-column prop="field_path" :label="t.field.fieldPath" min-width="120" show-overflow-tooltip class-name="nowrap-column" label-class-name="nowrap-column" />
                   <el-table-column :label="t.field.ruleType"><template #default="{ row }">{{ local(t.ruleTypes, row.rule_type) }}</template></el-table-column>
                   <el-table-column :label="t.field.operator"><template #default="{ row }">{{ ruleOperator(row) }}</template></el-table-column>
@@ -2050,6 +2131,7 @@ watch([alertPage, alertPageSize], async () => {
             <el-input v-model="ruleForm.message_template" type="textarea" />
             <div class="form-help">{{ t.messageVars }}</div>
           </el-form-item>
+          <el-form-item :label="t.field.continuousAlert"><el-switch v-model="ruleForm.continuous_alert" /></el-form-item>
           <el-form-item :label="t.field.enabled"><el-switch v-model="ruleForm.enabled" /></el-form-item>
         </template>
 

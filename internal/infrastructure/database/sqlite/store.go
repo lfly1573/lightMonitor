@@ -300,6 +300,74 @@ func (s *Store) ListItems(ctx context.Context, groupID int64) ([]core.Item, erro
 	return items, rows.Err()
 }
 
+func (s *Store) SearchItems(ctx context.Context, groupID int64, q string, status string, sortProp string, sortOrder string) ([]core.Item, error) {
+	query := `
+		SELECT mi.id, mi.group_id, mi.source_type, mi.name, mi.description, mi.interval_seconds,
+		       mi.missed_times_threshold, mi.alert_enabled, mi.enabled, mi.response_settings_json,
+		       COALESCE(mi.last_seen_at, ''), mi.created_at, mi.ref_item_id, COALESCE(ref.name, '')
+		FROM monitor_items mi
+		LEFT JOIN monitor_items ref ON mi.ref_item_id = ref.id
+		LEFT JOIN (
+			SELECT item_id, status
+			FROM monitor_samples
+			WHERE id IN (SELECT MAX(id) FROM monitor_samples GROUP BY item_id)
+		) ms ON mi.id = ms.item_id
+		WHERE mi.deleted_at IS NULL
+	`
+	args := []interface{}{}
+	if groupID > 0 {
+		query += " AND mi.group_id = ?"
+		args = append(args, groupID)
+	}
+	if q != "" {
+		query += " AND mi.name LIKE ?"
+		args = append(args, "%"+q+"%")
+	}
+	if status == "ok" {
+		query += " AND COALESCE(ms.status, '') = 'ok'"
+	} else if status == "error" {
+		query += " AND COALESCE(ms.status, '') != 'ok'"
+	}
+
+	sortCol := "COALESCE(mi.last_seen_at, '')"
+	sortDir := "DESC"
+
+	if sortProp != "" {
+		switch sortProp {
+		case "name":
+			sortCol = "mi.name"
+		case "status":
+			sortCol = "COALESCE(ms.status, '')"
+		case "created_at":
+			sortCol = "mi.created_at"
+		case "last_seen_at":
+			sortCol = "COALESCE(mi.last_seen_at, '')"
+		}
+	}
+	if sortOrder == "ascending" {
+		sortDir = "ASC"
+	} else if sortOrder == "descending" {
+		sortDir = "DESC"
+	}
+
+	query += fmt.Sprintf(" ORDER BY %s %s, mi.name ASC", sortCol, sortDir)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []core.Item
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Store) UpsertItem(ctx context.Context, input core.ItemInput) (core.Item, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, `
@@ -699,7 +767,7 @@ func (s *Store) ListRules(ctx context.Context, groupID int64) ([]core.AlertRule,
 		       COALESCE(field_path, ''), COALESCE(value_type, ''), COALESCE(operator, ''),
 		       COALESCE(threshold_value, ''), COALESCE(aggregate_func, ''),
 		       aggregate_window_seconds, aggregate_sample_count, consecutive_count, recovery_count,
-		       severity, message_template, enabled, COALESCE(combine_group, '')
+		       severity, message_template, enabled, COALESCE(combine_group, ''), continuous_alert
 		FROM alert_rules
 		WHERE deleted_at IS NULL
 	`
@@ -794,6 +862,7 @@ func (s *Store) UpsertRule(ctx context.Context, input core.AlertRuleInput) (core
 		Severity:               input.Severity,
 		MessageTemplate:        input.MessageTemplate,
 		CombineGroup:           input.CombineGroup,
+		ContinuousAlert:        input.ContinuousAlert != nil && *input.ContinuousAlert,
 		Enabled:                input.Enabled != nil && *input.Enabled,
 		ChannelIDs:             input.ChannelIDs,
 	}
@@ -810,13 +879,13 @@ func (s *Store) UpsertRule(ctx context.Context, input core.AlertRuleInput) (core
 				(name, scope_type, group_id, item_id, field_definition_id, source_type, rule_type,
 				 field_path, value_type, operator, threshold_value, aggregate_func,
 				 aggregate_window_seconds, aggregate_sample_count, consecutive_count, recovery_count,
-				 severity, message_template, enabled, combine_group)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				 severity, message_template, enabled, combine_group, continuous_alert)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, rule.Name, rule.ScopeType, nullableInt(rule.GroupID), nullableInt(rule.ItemID), nullableInt(rule.FieldDefinitionID),
 			rule.SourceType, rule.RuleType, nullableString(rule.FieldPath), nullableString(rule.ValueType),
 			nullableString(rule.Operator), nullableString(rule.ThresholdValue), nullableString(rule.AggregateFunc),
 			nullableIntFromInt(rule.AggregateWindowSeconds), nullableIntFromInt(rule.AggregateSampleCount),
-			rule.ConsecutiveCount, rule.RecoveryCount, rule.Severity, rule.MessageTemplate, boolToInt(rule.Enabled), rule.CombineGroup)
+			rule.ConsecutiveCount, rule.RecoveryCount, rule.Severity, rule.MessageTemplate, boolToInt(rule.Enabled), rule.CombineGroup, boolToInt(rule.ContinuousAlert))
 		if err != nil {
 			return core.AlertRule{}, err
 		}
@@ -828,13 +897,13 @@ func (s *Store) UpsertRule(ctx context.Context, input core.AlertRuleInput) (core
 			    source_type = ?, rule_type = ?, field_path = ?, value_type = ?, operator = ?,
 			    threshold_value = ?, aggregate_func = ?, aggregate_window_seconds = ?,
 			    aggregate_sample_count = ?, consecutive_count = ?, recovery_count = ?,
-			    severity = ?, message_template = ?, enabled = ?, combine_group = ?, updated_at = CURRENT_TIMESTAMP
+			    severity = ?, message_template = ?, enabled = ?, combine_group = ?, continuous_alert = ?, updated_at = CURRENT_TIMESTAMP
 			WHERE id = ? AND deleted_at IS NULL
 		`, rule.Name, rule.ScopeType, nullableInt(rule.GroupID), nullableInt(rule.ItemID), nullableInt(rule.FieldDefinitionID),
 			rule.SourceType, rule.RuleType, nullableString(rule.FieldPath), nullableString(rule.ValueType),
 			nullableString(rule.Operator), nullableString(rule.ThresholdValue), nullableString(rule.AggregateFunc),
 			nullableIntFromInt(rule.AggregateWindowSeconds), nullableIntFromInt(rule.AggregateSampleCount),
-			rule.ConsecutiveCount, rule.RecoveryCount, rule.Severity, rule.MessageTemplate, boolToInt(rule.Enabled), rule.CombineGroup, id)
+			rule.ConsecutiveCount, rule.RecoveryCount, rule.Severity, rule.MessageTemplate, boolToInt(rule.Enabled), rule.CombineGroup, boolToInt(rule.ContinuousAlert), id)
 		if err != nil {
 			return core.AlertRule{}, err
 		}
@@ -868,7 +937,7 @@ func (s *Store) ruleByID(ctx context.Context, id int64) (core.AlertRule, error) 
 		       COALESCE(field_path, ''), COALESCE(value_type, ''), COALESCE(operator, ''),
 		       COALESCE(threshold_value, ''), COALESCE(aggregate_func, ''),
 		       aggregate_window_seconds, aggregate_sample_count, consecutive_count, recovery_count,
-		       severity, message_template, enabled, COALESCE(combine_group, '')
+		       severity, message_template, enabled, COALESCE(combine_group, ''), continuous_alert
 		FROM alert_rules
 		WHERE id = ? AND deleted_at IS NULL
 	`, id)
@@ -1256,7 +1325,7 @@ func (s *Store) AlertRulesForSample(ctx context.Context, sample core.Sample) ([]
 		       COALESCE(field_path, ''), COALESCE(value_type, ''), COALESCE(operator, ''),
 		       COALESCE(threshold_value, ''), COALESCE(aggregate_func, ''),
 		       aggregate_window_seconds, aggregate_sample_count, consecutive_count, recovery_count,
-		       severity, message_template, enabled, COALESCE(combine_group, '')
+		       severity, message_template, enabled, COALESCE(combine_group, ''), continuous_alert
 		FROM alert_rules
 		WHERE deleted_at IS NULL AND enabled = 1
 		  AND (source_type = 'any' OR source_type = ?)
@@ -1332,10 +1401,12 @@ func (s *Store) ApplyAlertEvaluation(ctx context.Context, rule core.AlertRule, s
 			state.FirstHitAt = now
 		}
 		state.LastHitAt = now
-		if state.Status != "alerting" && state.ConsecutiveHits >= rule.ConsecutiveCount {
-			eventType = "triggered"
-			state.Status = "alerting"
-			state.LastAlertAt = now
+		if state.ConsecutiveHits >= rule.ConsecutiveCount {
+			if state.Status != "alerting" || rule.ContinuousAlert {
+				eventType = "triggered"
+				state.Status = "alerting"
+				state.LastAlertAt = now
+			}
 		}
 	} else {
 		state.ConsecutiveHits = 0
@@ -1702,12 +1773,13 @@ func scanRule(row scanner) (core.AlertRule, error) {
 	var rule core.AlertRule
 	var groupID, itemID, fieldID sql.NullInt64
 	var window, sampleCount sql.NullInt64
-	var enabled int
+	var enabled, continuousAlert int
 	var combineGroup sql.NullString
 	err := row.Scan(&rule.ID, &rule.Name, &rule.ScopeType, &groupID, &itemID, &fieldID, &rule.SourceType,
 		&rule.RuleType, &rule.FieldPath, &rule.ValueType, &rule.Operator, &rule.ThresholdValue,
 		&rule.AggregateFunc, &window, &sampleCount, &rule.ConsecutiveCount, &rule.RecoveryCount,
-		&rule.Severity, &rule.MessageTemplate, &enabled, &combineGroup)
+		&rule.Severity, &rule.MessageTemplate, &enabled, &combineGroup, &continuousAlert)
+	rule.ContinuousAlert = continuousAlert == 1
 	if groupID.Valid {
 		rule.GroupID = &groupID.Int64
 	}

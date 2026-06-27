@@ -188,6 +188,7 @@ type AlertRule struct {
 	Severity               string  `json:"severity"`
 	MessageTemplate        string  `json:"message_template"`
 	CombineGroup           string  `json:"combine_group"`
+	ContinuousAlert        bool    `json:"continuous_alert"`
 	Enabled                bool    `json:"enabled"`
 	ChannelIDs             []int64 `json:"channel_ids,omitempty"`
 }
@@ -213,6 +214,7 @@ type AlertRuleInput struct {
 	Severity               string  `json:"severity"`
 	MessageTemplate        string  `json:"message_template"`
 	CombineGroup           string  `json:"combine_group"`
+	ContinuousAlert        *bool   `json:"continuous_alert"`
 	Enabled                *bool   `json:"enabled"`
 	ChannelIDs             []int64 `json:"channel_ids,omitempty"`
 }

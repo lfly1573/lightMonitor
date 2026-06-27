@@ -330,6 +330,7 @@ CREATE TABLE IF NOT EXISTS alert_rules (
         CHECK (severity IN ('info', 'warning', 'critical')),
     message_template TEXT NOT NULL DEFAULT '',
     combine_group TEXT NOT NULL DEFAULT '',
+    continuous_alert INTEGER NOT NULL DEFAULT 0 CHECK (continuous_alert IN (0, 1)),
     enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

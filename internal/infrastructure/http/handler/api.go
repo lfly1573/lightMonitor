@@ -183,7 +183,12 @@ func (h *APIHandler) DeleteGroup(c *gin.Context) {
 }
 
 func (h *APIHandler) Items(c *gin.Context) {
-	items, err := h.service.Items(c.Request.Context(), queryInt64(c, "group_id"))
+	groupID := queryInt64(c, "group_id")
+	q := c.Query("q")
+	status := c.Query("status")
+	sortProp := c.Query("sort_prop")
+	sortOrder := c.Query("sort_order")
+	items, err := h.service.SearchItems(c.Request.Context(), groupID, q, status, sortProp, sortOrder)
 	if err != nil {
 		writeError(c, err)
 		return

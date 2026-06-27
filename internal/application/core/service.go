@@ -46,6 +46,7 @@ type Store interface {
 	GetGroupByID(ctx context.Context, id int64) (Group, error)
 
 	ListItems(ctx context.Context, groupID int64) ([]Item, error)
+	SearchItems(ctx context.Context, groupID int64, q string, status string, sortProp string, sortOrder string) ([]Item, error)
 	GetItemByID(ctx context.Context, id int64) (Item, error)
 	UpsertItem(ctx context.Context, input ItemInput) (Item, error)
 	UpdateItem(ctx context.Context, id int64, input ItemInput) (Item, error)
@@ -154,6 +155,10 @@ func (s *Service) DeleteGroup(ctx context.Context, id int64) error {
 
 func (s *Service) Items(ctx context.Context, groupID int64) ([]Item, error) {
 	return s.store.ListItems(ctx, groupID)
+}
+
+func (s *Service) SearchItems(ctx context.Context, groupID int64, q string, status string, sortProp string, sortOrder string) ([]Item, error) {
+	return s.store.SearchItems(ctx, groupID, q, status, sortProp, sortOrder)
 }
 
 func (s *Service) CreateItem(ctx context.Context, input ItemInput) (Item, error) {

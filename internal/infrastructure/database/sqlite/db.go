@@ -429,5 +429,32 @@ func migrateCompat(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	// 11. Check alert_rules for continuous_alert column
+	rowsRules, err = db.QueryContext(ctx, `PRAGMA table_info(alert_rules)`)
+	if err != nil {
+		return err
+	}
+	hasContinuousAlert := false
+	for rowsRules.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue, pk interface{}
+		if err := rowsRules.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			rowsRules.Close()
+			return err
+		}
+		if name == "continuous_alert" {
+			hasContinuousAlert = true
+		}
+	}
+	rowsRules.Close()
+
+	if !hasContinuousAlert {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE alert_rules ADD COLUMN continuous_alert INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
