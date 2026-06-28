@@ -460,7 +460,7 @@ const text = {
     ruleTypes: { missing_data: '缺失数据', request_failed: '请求失败', field_condition: '字段条件', aggregate_condition: '聚合条件' },
     operators: { gt: '>', gte: '>=', lt: '<', lte: '<=', eq: '=', ne: '!=', contains: '包含', not_contains: '不包含', exists: '字段存在', not_exists: '字段不存在', len_eq: '长度=', len_gt: '长度>', len_lt: '长度<', len_ne: '长度!=' },
     severities: { info: '信息', warning: '警告', critical: '严重', recovered: '恢复' },
-    channelTemplates: { dingding: '钉钉机器人报警', telegram: 'Telegram 报警' },
+    channelTemplates: { dingding: '钉钉机器人报警', feishu: '飞书机器人报警', telegram: 'Telegram 报警' },
   },
   'en-US': {
     invalidJSON: 'Invalid JSON format',
@@ -601,7 +601,7 @@ const text = {
     ruleTypes: { missing_data: 'Missing Data', request_failed: 'Request Failed', field_condition: 'Field Condition', aggregate_condition: 'Aggregate Condition' },
     operators: { gt: '>', gte: '>=', lt: '<', lte: '<=', eq: '=', ne: '!=', contains: 'Contains', not_contains: 'Does Not Contain', exists: 'Field Exists', not_exists: 'Field Missing', len_eq: 'Length =', len_gt: 'Length >', len_lt: 'Length <', len_ne: 'Length !=' },
     severities: { info: 'Info', warning: 'Warning', critical: 'Critical', recovered: 'Recovered' },
-    channelTemplates: { dingding: 'DingTalk Robot Alert', telegram: 'Telegram Alert' },
+    channelTemplates: { dingding: 'DingTalk Robot Alert', feishu: 'Feishu Robot Alert', telegram: 'Telegram Alert' },
   },
 }
 
@@ -2138,12 +2138,12 @@ watch([alertPage, alertPageSize], async () => {
         <template v-if="drawer.type === 'channel'">
           <el-form-item :label="t.field.code"><el-input v-model="channelForm.code" /></el-form-item>
           <el-form-item :label="t.field.name"><el-input v-model="channelForm.name" /></el-form-item>
-          <el-form-item :label="t.labels.channelTemplate"><el-select v-model="channelForm.channel_type"><el-option :label="t.channelTemplates.dingding" value="dingding" /><el-option :label="t.channelTemplates.telegram" value="telegram" /></el-select></el-form-item>
-          <template v-if="channelForm.channel_type === 'dingding'">
+          <el-form-item :label="t.labels.channelTemplate"><el-select v-model="channelForm.channel_type"><el-option :label="t.channelTemplates.dingding" value="dingding" /><el-option :label="t.channelTemplates.feishu" value="feishu" /><el-option :label="t.channelTemplates.telegram" value="telegram" /></el-select></el-form-item>
+          <template v-if="channelForm.channel_type === 'dingding' || channelForm.channel_type === 'feishu'">
             <el-form-item :label="t.field.webhook"><el-input v-model="channelForm.webhook" /></el-form-item>
             <el-form-item :label="t.field.secret"><el-input v-model="channelForm.secret" /></el-form-item>
           </template>
-          <template v-else>
+          <template v-else-if="channelForm.channel_type === 'telegram'">
             <el-form-item :label="t.field.botToken"><el-input v-model="channelForm.bot_token" /></el-form-item>
             <el-form-item :label="t.field.chatID"><el-input v-model="channelForm.chat_id" /></el-form-item>
           </template>

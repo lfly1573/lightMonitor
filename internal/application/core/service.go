@@ -801,6 +801,27 @@ func (s *Service) sendCombinedChannelText(ctx context.Context, channel Channel, 
 			},
 		}
 		return s.postJSON(ctx, webhook, body)
+	case "feishu":
+		webhook := fmt.Sprint(cfg["webhook"])
+		if webhook == "" || webhook == "<nil>" {
+			return "", "", errors.New("missing feishu webhook")
+		}
+		secret := fmt.Sprint(cfg["secret"])
+		body := map[string]interface{}{
+			"msg_type": "text",
+			"content": map[string]interface{}{
+				"text": text,
+			},
+		}
+		if secret != "" && secret != "<nil>" {
+			timestamp := time.Now().Unix()
+			stringToSign := fmt.Sprintf("%d\n%s", timestamp, secret)
+			h := hmac.New(sha256.New, []byte(stringToSign))
+			sign := base64.StdEncoding.EncodeToString(h.Sum(nil))
+			body["timestamp"] = fmt.Sprintf("%d", timestamp)
+			body["sign"] = sign
+		}
+		return s.postJSON(ctx, webhook, body)
 	case "telegram":
 		token := fmt.Sprint(cfg["bot_token"])
 		chatID := fmt.Sprint(cfg["chat_id"])
@@ -1133,6 +1154,27 @@ func (s *Service) sendChannel(ctx context.Context, channel Channel, event AlertE
 			"text": map[string]string{
 				"content": text,
 			},
+		}
+		return s.postJSON(ctx, webhook, body)
+	case "feishu":
+		webhook := fmt.Sprint(cfg["webhook"])
+		if webhook == "" || webhook == "<nil>" {
+			return "", "", errors.New("missing feishu webhook")
+		}
+		secret := fmt.Sprint(cfg["secret"])
+		body := map[string]interface{}{
+			"msg_type": "text",
+			"content": map[string]interface{}{
+				"text": text,
+			},
+		}
+		if secret != "" && secret != "<nil>" {
+			timestamp := time.Now().Unix()
+			stringToSign := fmt.Sprintf("%d\n%s", timestamp, secret)
+			h := hmac.New(sha256.New, []byte(stringToSign))
+			sign := base64.StdEncoding.EncodeToString(h.Sum(nil))
+			body["timestamp"] = fmt.Sprintf("%d", timestamp)
+			body["sign"] = sign
 		}
 		return s.postJSON(ctx, webhook, body)
 	case "telegram":
